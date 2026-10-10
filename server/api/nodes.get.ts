@@ -1,5 +1,5 @@
-import { desc } from 'drizzle-orm'
+import { desc, eq } from 'drizzle-orm'
 
 export default defineEventHandler(() =>
-  useDb().select().from(schema.nodes).orderBy(desc(schema.nodes.lastHeard))
+  useDb().select().from(schema.nodes).where(eq(schema.nodes.monitored, true)).orderBy(desc(schema.nodes.lastHeard))
 )

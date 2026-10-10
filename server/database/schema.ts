@@ -1,11 +1,15 @@
-import { mysqlTable, int, varchar, double, float, datetime, serial, index, uniqueIndex } from 'drizzle-orm/mysql-core'
+import { mysqlTable, mysqlEnum, int, varchar, double, float, datetime, serial, boolean, index, uniqueIndex, primaryKey } from 'drizzle-orm/mysql-core'
 
 const ts = (name = 'ts') => datetime(name, { mode: 'date' })
 
-/** One row per node, holding the latest known values for fast dashboard loads. */
+/**
+ * One row per node, holding the latest known values for fast dashboard loads.
+ * Unmonitored nodes (not in NUXT_NODE_IDS) only get name + position, to measure RF link distances.
+ */
 export const nodes = mysqlTable('nodes', {
   num: int('num', { unsigned: true }).primaryKey(),
   id: varchar('id', { length: 9 }).notNull(),
+  monitored: boolean('monitored').notNull().default(false),
   longName: varchar('long_name', { length: 64 }),
   shortName: varchar('short_name', { length: 8 }),
   hwModel: varchar('hw_model', { length: 48 }),
@@ -83,4 +87,24 @@ export const packets = mysqlTable('packets', {
 }, t => [
   uniqueIndex('packets_from_id').on(t.from, t.packetId),
   index('packets_ts').on(t.ts)
+])
+
+/**
+ * Direct (0-hop) RF links, one row per transmitter → receiver pair.
+ * direct   = a gateway heard the sender with no hops used
+ * relay    = inferred from relayNode on a 1-hop packet
+ * neighbor = reported by the receiver's NeighborInfo module
+ */
+export const links = mysqlTable('links', {
+  fromNum: int('from_num', { unsigned: true }).notNull(),
+  toNum: int('to_num', { unsigned: true }).notNull(),
+  source: mysqlEnum('source', ['direct', 'relay', 'neighbor']).notNull(),
+  snr: float('snr'),
+  rssi: int('rssi'),
+  count: int('count', { unsigned: true }).notNull().default(1),
+  firstSeen: ts('first_seen').notNull(),
+  lastSeen: ts('last_seen').notNull()
+}, t => [
+  primaryKey({ columns: [t.fromNum, t.toNum] }),
+  index('links_to').on(t.toNum)
 ])

@@ -1,0 +1,57 @@
+export const ONLINE_MS = 2 * 3_600_000
+export const STALE_MS = 24 * 3_600_000
+
+export type NodeStatus = { label: string, color: 'success' | 'warning' | 'neutral', icon: string }
+
+export function nodeStatus(lastHeard: string | null, now: number): NodeStatus {
+  const age = lastHeard ? now - Date.parse(lastHeard) : Infinity
+  if (age < ONLINE_MS) return { label: 'Online', color: 'success', icon: 'i-lucide-circle-check' }
+  if (age < STALE_MS) return { label: 'Stale', color: 'warning', icon: 'i-lucide-clock' }
+  return { label: lastHeard ? 'Offline' : 'Never heard', color: 'neutral', icon: 'i-lucide-circle-off' }
+}
+
+export function timeAgo(date: string | null, now: number) {
+  if (!date) return '—'
+  const s = Math.max(0, Math.round((now - Date.parse(date)) / 1000))
+  if (s < 60) return 'just now'
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`
+  return `${Math.floor(s / 86400)} d ago`
+}
+
+export function fmt(value: number | null | undefined, unit = '', digits = 1) {
+  return value == null ? '—' : `${Number(value.toFixed(digits))}${unit}`
+}
+
+export function formatUptime(seconds: number | null) {
+  if (seconds == null) return '—'
+  const d = Math.floor(seconds / 86400)
+  const h = Math.floor((seconds % 86400) / 3600)
+  return d ? `${d}d ${h}h` : `${h}h ${Math.floor((seconds % 3600) / 60)}m`
+}
+
+export const nodeName = (n: Pick<MeshNode, 'longName' | 'id'>) => n.longName || n.id
+
+/** Battery level 101 means "powered" in Meshtastic. */
+export const batteryLabel = (b: number | null) => (b == null ? '—' : b > 100 ? 'Charging' : `${b}%`)
+
+const ACRONYMS = new Set(['RAK', 'TLORA', 'TBEAM', 'LILYGO', 'ESP32', 'NRF52', 'RP2040', 'TDECK', 'LR1110', 'SX1262', 'USB', 'GPS', 'LTE', 'II', 'V2', 'V3', 'V4'])
+
+/** "HELTEC_MESH_POCKET" → "Heltec Mesh Pocket", "CLIENT_MUTE" → "Client Mute" */
+export function prettyEnum(value: string | null) {
+  if (!value) return null
+  return value.split('_')
+    .map(w => (ACRONYMS.has(w) || /\d/.test(w) ? w : w[0] + w.slice(1).toLowerCase()))
+    .join(' ')
+}
+
+/** Meshtastic reports battery 101 when the node runs on external power (charging). */
+export const isCharging = (b: number | null) => b != null && b > 100
+
+export function batteryIcon(b: number | null) {
+  if (b == null) return 'i-lucide-battery'
+  if (isCharging(b)) return 'i-lucide-battery-charging'
+  if (b <= 20) return 'i-lucide-battery-low'
+  if (b <= 60) return 'i-lucide-battery-medium'
+  return 'i-lucide-battery-full'
+}

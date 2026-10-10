@@ -24,11 +24,13 @@ export default defineNitroPlugin(async (nitroApp) => {
   })
   client.on('connect', () => {
     console.info(`[mqtt] connected to ${config.mqttUrl}, subscribing to ${config.mqttTopic}` +
-      (allow.size ? ` (${allow.size} nodes)` : ' (all nodes)'))
+      (allow.size ? ` (${allow.size} node${allow.size > 1 ? 's' : ''})` : ' (all nodes)'))
     client.subscribe(config.mqttTopic)
   })
   client.on('error', err => console.error('[mqtt]', err.message))
   client.on('message', (topic, payload) => {
+    // Only protobuf envelopes (".../2/e/..."); skip JSON, map reports and status topics.
+    if (!topic.includes('/e/')) return
     ingest(payload, { keys, allow }).catch(err => console.warn(`[mqtt] ${topic}: ${err.message}`))
   })
 
