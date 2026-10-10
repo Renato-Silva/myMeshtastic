@@ -33,9 +33,12 @@ function update_script() {
   fi
 
   cd /opt/mymeshtastic || exit
+  # Commit of the last successful build; a failed update leaves it stale, so the next run retries
+  local marker=/opt/mymeshtastic/.output/.built-commit
   $STD git fetch origin master
-  if [[ "$(git rev-parse HEAD)" == "$(git rev-parse origin/master)" ]]; then
+  if [[ "$(cat "$marker" 2>/dev/null)" == "$(git rev-parse origin/master)" && -f .output/server/index.mjs ]]; then
     msg_ok "${APP} is already up to date ($(git rev-parse --short HEAD))"
+    systemctl is-active -q mymeshtastic || systemctl start mymeshtastic
     exit
   fi
 
@@ -43,14 +46,27 @@ function update_script() {
   systemctl stop mymeshtastic
   msg_ok "Stopped Service"
 
+  # Never leave the dashboard down: restart it whatever happens below, keeping core's exit handler
+  local core_exit_trap
+  core_exit_trap="$(trap -p EXIT)"
+  trap '_rc=$?; systemctl start mymeshtastic; if declare -F on_exit >/dev/null; then (exit $_rc); on_exit; fi' EXIT
+
   msg_info "Updating ${APP}"
   # .env is untracked, so the reset keeps it
   $STD git reset --hard origin/master
   NODE_VERSION="24" setup_nodejs
-  $STD npm ci --no-audit --no-fund
+  # npm ci occasionally fails on a stale node_modules or a network hiccup; retry once from scratch
+  if ! $STD npm ci --no-audit --no-fund; then
+    msg_warn "npm ci failed, retrying with a clean node_modules"
+    rm -rf node_modules
+    $STD npm cache verify
+    $STD npm ci --no-audit --no-fund
+  fi
   $STD npm run build
+  git rev-parse HEAD >"$marker"
   msg_ok "Updated ${APP} to $(git rev-parse --short HEAD)"
 
+  eval "${core_exit_trap:-trap - EXIT}"
   msg_info "Starting Service"
   systemctl start mymeshtastic
   msg_ok "Started Service"
