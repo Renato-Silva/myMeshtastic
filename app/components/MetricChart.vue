@@ -19,6 +19,8 @@ const THEME = {
 
 const hasData = computed(() => props.series.some(s => s.data.some(([, v]) => v != null)))
 
+const formatValue = (v: number | null | undefined) => v == null ? '—' : `${Number(v.toFixed(props.digits ?? 1))} ${props.unit}`
+
 const option = computed(() => {
   const { text, grid, series } = THEME[colorMode.value === 'dark' ? 'dark' : 'light']
   const multi = props.series.length > 1
@@ -30,12 +32,20 @@ const option = computed(() => {
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'line', lineStyle: { color: text, type: 'dashed' } },
-      valueFormatter: (v: number) => v == null ? '—' : `${Number(v.toFixed(props.digits ?? 1))} ${props.unit}`
+      // Own formatter so the header time is 24h regardless of ECharts' locale defaults
+      formatter: (params: { axisValue: number, marker: string, seriesName: string, value: [string, number | null] }[]) =>
+        [formatDateTime(params[0]?.axisValue ?? null)]
+          .concat(params.map(p => `${p.marker} ${p.seriesName} <b>${formatValue(p.value[1])}</b>`))
+          .join('<br>')
     },
     xAxis: {
       type: 'time',
       axisLine: { lineStyle: { color: grid } },
-      axisLabel: { color: text, hideOverlap: true },
+      axisLabel: {
+        color: text,
+        hideOverlap: true,
+        formatter: { year: '{yyyy}', month: '{MMM}', day: '{d} {MMM}', hour: '{HH}:{mm}', minute: '{HH}:{mm}', second: '{HH}:{mm}:{ss}', millisecond: '{HH}:{mm}:{ss}' }
+      },
       splitLine: { show: false }
     },
     yAxis: {

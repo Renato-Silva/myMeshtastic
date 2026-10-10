@@ -11,7 +11,8 @@
     "start": "node .output/server/index.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "typecheck": "nuxt typecheck"
+    "typecheck": "nuxt typecheck",
+    "test": "node --test test/"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.16.0",

@@ -2,6 +2,8 @@ import type { MeshEvent } from '../utils/bus'
 
 /** Server-Sent Events: pushes node, packet, link, message, traceroute and broker status updates. */
 export default defineEventHandler(async (event) => {
+  // Otherwise nginx (e.g. Forge) buffers the stream and events arrive in bursts, or not at all.
+  setResponseHeader(event, 'X-Accel-Buffering', 'no')
   const stream = createEventStream(event)
   const send = (e: MeshEvent) => stream.push({ event: e.type, data: JSON.stringify(e.data) })
   meshBus.on('event', send)

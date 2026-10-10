@@ -3,7 +3,7 @@ import { and, asc, eq, gte } from 'drizzle-orm'
 const flatten = (rows: { ts: Date, data: Record<string, number> }[]) => rows.map(r => ({ ts: r.ts, ...r.data }))
 
 export default defineEventHandler(async (event) => {
-  const num = Number(getRouterParam(event, 'num'))
+  const num = routeNodeNum(event)
   const { since, bucketMs } = parseRange(getQuery(event).range)
   const db = useDb()
   const { envMetrics: env, deviceMetrics: dev, extraMetrics: extra } = schema

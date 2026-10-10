@@ -15,6 +15,9 @@ services:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 5s
       retries: 20
+    logging:
+      driver: json-file
+      options: { max-size: 10m, max-file: "3" }
 
   app:
     build: .
@@ -24,7 +27,11 @@ services:
     environment:
       NUXT_DATABASE_URL: mysql://mesh:${MYSQL_PASSWORD:-mesh}@db:3306/meshtastic
     ports:
-      - "3000:3000"
+      # Put a reverse proxy (TLS) in front; set APP_BIND=0.0.0.0 to expose it directly
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-3000}:3000"
+    logging:
+      driver: json-file
+      options: { max-size: 10m, max-file: "3" }
     depends_on:
       db:
         condition: service_healthy

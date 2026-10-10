@@ -46,10 +46,10 @@ const hasEnv = computed(() => n.value.temperature != null || n.value.humidity !=
         </template>
       </div>
 
-      <p class="flex items-center gap-1 text-xs text-muted" :title="n.lastHeard ? new Date(n.lastHeard).toLocaleString() : undefined">
+      <p class="flex items-center gap-1 text-xs text-muted" :title="n.lastHeard ? formatDateTime(n.lastHeard) : undefined">
         <UIcon name="i-lucide-eye" class="size-3.5" />
         Last seen {{ timeAgo(n.lastHeard, now) }}
-        <span v-if="n.lastHeard">· {{ new Date(n.lastHeard).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) }}</span>
+        <span v-if="n.lastHeard">· {{ formatDateTime(n.lastHeard, true) }}</span>
       </p>
     </UCard>
   </NuxtLink>

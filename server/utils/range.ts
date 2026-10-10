@@ -36,3 +36,13 @@ export function bucketRows<T extends { ts: Date }>(rows: T[], bucketMs: number):
     return out as T
   })
 }
+
+/** Drops fixes identical to the node's previous one (stationary nodes re-send the same position every few minutes). */
+export function dedupePositions<T extends { nodeNum: number, lat: number, lon: number }>(rows: T[]): T[] {
+  const last = new Map<number, T>()
+  return rows.filter((row) => {
+    const prev = last.get(row.nodeNum)
+    last.set(row.nodeNum, row)
+    return !prev || prev.lat !== row.lat || prev.lon !== row.lon
+  })
+}

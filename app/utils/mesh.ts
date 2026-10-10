@@ -19,6 +19,14 @@ export function timeAgo(date: string | null, now: number) {
   return `${Math.floor(s / 86400)} d ago`
 }
 
+/** Date + time, always 24h ("10/10/2026, 14:05:09"), whatever the browser locale. */
+export function formatDateTime(date: string | number | Date | null, short = false) {
+  if (date == null) return ''
+  return new Date(date).toLocaleString([], short
+    ? { dateStyle: 'short', timeStyle: 'short', hourCycle: 'h23' }
+    : { dateStyle: 'short', timeStyle: 'medium', hourCycle: 'h23' })
+}
+
 export function fmt(value: number | null | undefined, unit = '', digits = 1) {
   return value == null ? '—' : `${Number(value.toFixed(digits))}${unit}`
 }

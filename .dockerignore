@@ -1,5 +1,16 @@
 node_modules
 .output
 .nuxt
+.nitro
+.cache
+.data
 .env
+.env.*
+!.env.example
 .git
+.github
+.claude
+test
+*.log
+docker-compose*.yml
+Dockerfile

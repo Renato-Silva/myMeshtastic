@@ -21,7 +21,7 @@ const back = (t: MeshTraceroute) => [t.from, ...t.routeBack, t.to]
           {{ longLabel(t.names[t.to]) }} <span class="text-muted">traced</span> {{ longLabel(t.names[t.from]) }}
           <span class="text-sm text-muted">· {{ t.route.length }} hop{{ t.route.length === 1 ? '' : 's' }} out, {{ t.routeBack.length }} back</span>
         </p>
-        <span class="text-xs text-muted" :title="new Date(t.ts).toLocaleString()">{{ timeAgo(t.ts, now) }} · via {{ t.gateway ?? '—' }}</span>
+        <span class="text-xs text-muted" :title="formatDateTime(t.ts)">{{ timeAgo(t.ts, now) }} · via {{ t.gateway ?? '—' }}</span>
       </div>
       <div class="space-y-3">
         <div>

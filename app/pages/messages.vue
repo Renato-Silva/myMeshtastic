@@ -35,7 +35,7 @@ const shown = computed(() => onlyMine.value
               <NuxtLink :to="`/nodes/${m.from}`" class="font-medium hover:underline">{{ longLabel(m.fromName) }}</NuxtLink>
               <span v-if="m.to !== BROADCAST" class="text-muted">→ {{ longLabel(m.toName ?? undefined) }}</span>
               <UBadge v-if="m.channel" variant="soft" color="neutral" size="sm" :label="m.channel" />
-              <span class="ml-auto text-xs text-muted" :title="new Date(m.ts).toLocaleString()">{{ timeAgo(m.ts, now) }}</span>
+              <span class="ml-auto text-xs text-muted" :title="formatDateTime(m.ts)">{{ timeAgo(m.ts, now) }}</span>
             </div>
             <p class="mt-0.5 whitespace-pre-wrap break-words" :class="m.emoji ? 'text-2xl' : ''">{{ m.text }}</p>
             <p class="mt-1 text-xs text-muted tabular-nums">

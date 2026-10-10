@@ -24,7 +24,7 @@ const numId = (num: number) => '!' + num.toString(16).padStart(8, '0')
       </thead>
       <tbody class="divide-y divide-default">
         <tr v-for="p in packets" :key="p.id" class="hover:bg-elevated/40">
-          <td class="whitespace-nowrap px-3 py-2 text-muted" :title="new Date(p.ts).toLocaleString()">{{ timeAgo(p.ts, now) }}</td>
+          <td class="whitespace-nowrap px-3 py-2 text-muted" :title="formatDateTime(p.ts)">{{ timeAgo(p.ts, now) }}</td>
           <td class="px-3 py-2"><NuxtLink :to="`/nodes/${p.from}`" class="font-medium hover:underline">{{ label(p.from) }}</NuxtLink></td>
           <td class="px-3 py-2 text-muted">{{ label(p.to) }}</td>
           <td class="px-3 py-2"><UBadge variant="soft" color="neutral" size="sm" :label="p.portnum.replace('_APP', '')" /></td>

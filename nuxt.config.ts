@@ -15,6 +15,28 @@ export default defineNuxtConfig({
       link: [{ rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }]
     }
   },
+  routeRules: {
+    '/**': {
+      headers: {
+        'X-Content-Type-Options': 'nosniff',
+        'X-Frame-Options': 'SAMEORIGIN',
+        'Referrer-Policy': 'strict-origin-when-cross-origin'
+      }
+    },
+    // Live data: never let a proxy or browser serve a stale copy
+    '/api/**': { headers: { 'Cache-Control': 'no-store' } }
+  },
+  nitro: {
+    rollupConfig: {
+      output: {
+        // Production doesn't read .env, and pm2 (Forge) doesn't either. Load it before Nitro snapshots
+        // the env into runtimeConfig; variables already set (compose, systemd) still win.
+        banner: chunk => chunk.fileName.endsWith('nitro.mjs')
+          ? `try { process.loadEnvFile() } catch {}`
+          : ''
+      }
+    }
+  },
   // Every key can be overridden with NUXT_<SNAKE_CASE> env vars (see .env.example)
   runtimeConfig: {
     // Empty = DB_HOST/DB_DATABASE/... (Forge) or the local docker-compose database, see server/database/url.ts
