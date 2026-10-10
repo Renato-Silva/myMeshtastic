@@ -8,12 +8,15 @@ import { redactUrl } from '../database/url'
 /** Messages waiting for the database; beyond this they're dropped so a stalled DB can't exhaust memory. */
 const MAX_PENDING = 10_000
 const RETENTION_BATCH = 5_000
+/** After the broker refuses the connection (e.g. "Not authorized"), wait before retrying: hammering it can get the IP banned. */
+const REFUSED_RETRY_MS = 30 * 60_000
 
 export default defineNitroPlugin((nitroApp) => {
   const config = useRuntimeConfig()
   const db = useDb()
   let client: MqttClient | undefined
   let cleanup: ReturnType<typeof setInterval> | undefined
+  let retry: ReturnType<typeof setTimeout> | undefined
   let stopped = false
   // One message at a time: dedup and relay resolution read what earlier messages wrote.
   let queue = Promise.resolve()
@@ -21,6 +24,7 @@ export default defineNitroPlugin((nitroApp) => {
   nitroApp.hooks.hook('close', async () => {
     stopped = true
     clearInterval(cleanup)
+    clearTimeout(retry)
     await client?.endAsync().catch(() => {})
     // Let already-received messages finish, but don't hang shutdown on a dead database.
     await Promise.race([queue, sleep(10_000, undefined, { ref: false })])
@@ -74,7 +78,17 @@ export default defineNitroPlugin((nitroApp) => {
       meshStatus.mqttConnected = false
       emitStatus()
     })
-    client.on('error', err => console.error('[mqtt]', err.message))
+    client.on('error', (err) => {
+      console.error('[mqtt]', err.message)
+      // A CONNACK refusal has a numeric reason code, and mqtt.js stops reconnecting after one. Try again much later.
+      if (typeof (err as { code?: unknown }).code === 'number' && !client!.connected && !retry && !stopped) {
+        console.warn(`[mqtt] broker refused the connection, retrying in ${REFUSED_RETRY_MS / 60_000} min`)
+        retry = setTimeout(() => {
+          retry = undefined
+          client?.reconnect()
+        }, REFUSED_RETRY_MS)
+      }
+    })
 
     let pending = 0
     let dropped = 0
