@@ -28,6 +28,8 @@ const env = computed(() => telemetry.value?.environment ?? [])
 const dev = computed(() => telemetry.value?.device ?? [])
 const has = (rows: any[], key: string) => rows.some(r => r[key] != null)
 const trail = computed(() => ({ [num]: track.value.map(p => [p.lat, p.lon] as [number, number]) }))
+const { links } = useMesh()
+const nodeLinks = computed(() => links.value.filter(l => l.fromNum === num || l.toNum === num))
 </script>
 
 <template>
@@ -76,9 +78,18 @@ const trail = computed(() => ({ [num]: track.value.map(p => [p.lat, p.lon] as [n
       />
     </div>
 
-    <ClientOnly>
-      <MeshMap v-if="node.lat != null" :key="num" :nodes="[node]" :trails="trail" height="360px" />
-    </ClientOnly>
+    <div class="grid gap-4 lg:grid-cols-[22rem_1fr]">
+      <UCard>
+        <template #header>
+          <p class="font-semibold">Top 5 direct RF links</p>
+          <p class="text-xs text-muted">Longest 0-hop links seen in the last 30 days</p>
+        </template>
+        <TopLinks :num="num" />
+      </UCard>
+      <ClientOnly>
+        <MeshMap v-if="node.lat != null" :key="num" :nodes="[node]" :trails="trail" :links="nodeLinks" height="360px" />
+      </ClientOnly>
+    </div>
 
     <div class="space-y-2">
       <h2 class="font-semibold">Recent packets</h2>

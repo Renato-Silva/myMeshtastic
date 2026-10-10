@@ -26,6 +26,7 @@ export default defineNuxtConfig({
     channelKeys: 'AQ==',
     // Comma-separated node IDs to monitor (e.g. "!a0cc2ad0,!f5adab84"). Empty = every node on the broker.
     nodeIds: '',
-    retentionDays: 30
+    // Days to keep the raw packet log; 0 = forever
+    retentionDays: 0
   }
 })

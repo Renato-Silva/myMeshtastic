@@ -3,17 +3,17 @@ import { alias } from 'drizzle-orm/mysql-core'
 
 const LINK_WINDOW_MS = 30 * 86_400_000
 
-const peerColumns = (n: typeof schema.nodes) => ({
-  num: n.num, id: n.id, shortName: n.shortName, longName: n.longName, lat: n.lat, lon: n.lon
-})
-
 /** Links seen in the last 30 days, with both ends' names/positions and the distance between them. */
 export async function queryLinks(filter?: SQL) {
   const l = schema.links
   const a = alias(schema.nodes, 'a')
   const b = alias(schema.nodes, 'b')
   const rows = await useDb()
-    .select({ link: l, from: peerColumns(a), to: peerColumns(b) })
+    .select({
+      link: l,
+      from: { num: a.num, id: a.id, shortName: a.shortName, longName: a.longName, lat: a.lat, lon: a.lon },
+      to: { num: b.num, id: b.id, shortName: b.shortName, longName: b.longName, lat: b.lat, lon: b.lon }
+    })
     .from(l)
     .leftJoin(a, eq(a.num, l.fromNum))
     .leftJoin(b, eq(b.num, l.toNum))

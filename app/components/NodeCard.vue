@@ -45,6 +45,8 @@ const hasEnv = computed(() => n.value.temperature != null || n.value.humidity !=
         </template>
       </div>
 
+      <TopLinks :num="n.num" compact class="border-t border-default pt-3" />
+
       <p class="flex items-center gap-1 text-xs text-muted" :title="n.lastHeard ? new Date(n.lastHeard).toLocaleString() : undefined">
         <UIcon name="i-lucide-eye" class="size-3.5" />
         Last seen {{ timeAgo(n.lastHeard, now) }}

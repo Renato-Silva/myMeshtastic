@@ -2,6 +2,7 @@
 export function useMesh() {
   const nodes = useState<MeshNode[]>('mesh-nodes', () => [])
   const packets = useState<MeshPacket[]>('mesh-packets', () => [])
+  const links = useState<MeshLink[]>('mesh-links', () => [])
   const connected = useState('mesh-connected', () => false)
 
   function upsertNode(node: MeshNode) {
@@ -10,7 +11,13 @@ export function useMesh() {
     else nodes.value[i] = node
   }
 
-  return { nodes, packets, connected, upsertNode }
+  function upsertLink(link: MeshLink) {
+    const i = links.value.findIndex(l => l.fromNum === link.fromNum && l.toNum === link.toNum)
+    if (i === -1) links.value.push(link)
+    else links.value[i] = link
+  }
+
+  return { nodes, packets, links, connected, upsertNode, upsertLink }
 }
 
 /** A clock that ticks every 30s so "x min ago" labels stay fresh. */

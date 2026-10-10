@@ -4,6 +4,7 @@ import type { Map as LeafletMap } from 'leaflet'
 const props = withDefaults(defineProps<{
   nodes: MeshNode[]
   trails?: Record<number, [number, number][]>
+  links?: MeshLink[]
   height?: string
 }>(), { height: '400px' })
 
@@ -11,8 +12,19 @@ const now = useNow()
 const located = computed(() => props.nodes.filter(n => n.lat != null && n.lon != null))
 const colors = { success: '#0ca30c', warning: '#fab219', neutral: '#8a8984' }
 
+const drawnLinks = computed(() => (props.links ?? []).filter(l => l.distanceKm != null))
+// Far ends of links that aren't one of the shown nodes (e.g. other people's nodes)
+const peers = computed(() => {
+  const shown = new Set(located.value.map(n => n.num))
+  const out = new Map<number, LinkPeer>()
+  for (const l of drawnLinks.value) {
+    for (const p of [l.from, l.to]) if (!shown.has(p.num)) out.set(p.num, p)
+  }
+  return [...out.values()]
+})
+
 function fit(map: LeafletMap) {
-  const points = located.value.map(n => [n.lat!, n.lon!] as [number, number])
+  const points = [...located.value, ...peers.value].map(n => [n.lat!, n.lon!] as [number, number])
   if (points.length) map.fitBounds(points, { padding: [40, 40], maxZoom: 15 })
 }
 </script>
@@ -34,6 +46,30 @@ function fit(map: LeafletMap) {
         :weight="2"
         :opacity="0.7"
       />
+      <LPolyline
+        v-for="l in drawnLinks"
+        :key="`link-${l.fromNum}-${l.toNum}`"
+        :lat-lngs="[[l.from.lat!, l.from.lon!], [l.to.lat!, l.to.lon!]]"
+        color="#eb6834"
+        :weight="2"
+        dash-array="6 6"
+      >
+        <LTooltip :options="{ sticky: true }">
+          {{ peerLabel(l.from) }} → {{ peerLabel(l.to) }} · {{ fmtKm(l.distanceKm!) }} · SNR {{ fmt(l.snr, ' dB') }}
+        </LTooltip>
+      </LPolyline>
+      <LCircleMarker
+        v-for="p in peers"
+        :key="`peer-${p.num}`"
+        :lat-lng="[p.lat!, p.lon!]"
+        :radius="5"
+        color="#ffffff"
+        :weight="1"
+        fill-color="#8a8984"
+        :fill-opacity="1"
+      >
+        <LTooltip>{{ p.longName ?? p.id }} ({{ peerLabel(p) }})</LTooltip>
+      </LCircleMarker>
       <LCircleMarker
         v-for="n in located"
         :key="n.num"

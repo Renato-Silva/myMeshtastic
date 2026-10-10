@@ -55,3 +55,37 @@ export function batteryIcon(b: number | null) {
   if (b <= 60) return 'i-lucide-battery-medium'
   return 'i-lucide-battery-full'
 }
+
+export interface TopLink {
+  peer: LinkPeer
+  distanceKm: number
+  snr: number | null
+  source: MeshLink['source']
+  lastSeen: string
+  count: number
+}
+
+/** A node's longest direct RF links, one entry per peer (A→B and B→A merged). */
+export function topLinks(links: MeshLink[], num: number, limit = 5): TopLink[] {
+  const byPeer = new Map<number, TopLink>()
+  for (const l of links) {
+    if (l.distanceKm == null || (l.fromNum !== num && l.toNum !== num)) continue
+    const peer = l.fromNum === num ? l.to : l.from
+    const prev = byPeer.get(peer.num)
+    byPeer.set(peer.num, {
+      peer,
+      distanceKm: l.distanceKm,
+      snr: l.snr ?? prev?.snr ?? null,
+      source: prev?.source === 'direct' ? 'direct' : l.source,
+      lastSeen: prev && prev.lastSeen > l.lastSeen ? prev.lastSeen : l.lastSeen,
+      count: (prev?.count ?? 0) + l.count
+    })
+  }
+  return [...byPeer.values()].sort((a, b) => b.distanceKm - a.distanceKm).slice(0, limit)
+}
+
+export const peerLabel = (p: LinkPeer) => p.shortName || p.id
+
+export function fmtKm(km: number) {
+  return km < 1 ? `${Math.round(km * 1000)} m` : `${Number(km.toFixed(km < 10 ? 2 : 1))} km`
+}

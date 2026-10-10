@@ -1,10 +1,10 @@
 <script setup lang="ts">
-const { nodes, connected } = useMesh()
-await callOnce('mesh-nodes', async () => {
-  nodes.value = await $fetch<MeshNode[]>('/api/nodes')
+const { nodes, links, connected } = useMesh()
+await callOnce('mesh-init', async () => {
+  [nodes.value, links.value] = await Promise.all([$fetch<MeshNode[]>('/api/nodes'), $fetch<MeshLink[]>('/api/links')])
 })
 
-const links = [
+const navLinks = [
   { label: 'Dashboard', icon: 'i-lucide-layout-dashboard', to: '/' },
   { label: 'Map', icon: 'i-lucide-map', to: '/map' },
   { label: 'Packets', icon: 'i-lucide-radio-tower', to: '/packets' }
@@ -19,7 +19,7 @@ const links = [
           <MeshtasticLogo class="h-5 w-auto text-highlighted" />
           <span class="hidden sm:inline">myMeshtastic</span>
         </NuxtLink>
-        <UNavigationMenu :items="links" class="flex-1" />
+        <UNavigationMenu :items="navLinks" class="flex-1" />
         <UBadge
           :color="connected ? 'success' : 'neutral'"
           variant="subtle"

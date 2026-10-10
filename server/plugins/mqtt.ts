@@ -14,7 +14,12 @@ export default defineNitroPlugin(async (nitroApp) => {
 
   // Configured nodes show up on the dashboard even before they are heard.
   if (allow.size) {
-    await db.insert(schema.nodes).ignore().values([...allow].map(num => ({ num, id: numToId(num) })))
+    await db.update(schema.nodes).set({ monitored: false })
+    await db.insert(schema.nodes)
+      .values([...allow].map(num => ({ num, id: numToId(num), monitored: true })))
+      .onDuplicateKeyUpdate({ set: { monitored: true } })
+  } else {
+    await db.update(schema.nodes).set({ monitored: true })
   }
 
   const client = mqtt.connect(config.mqttUrl, {
@@ -34,11 +39,14 @@ export default defineNitroPlugin(async (nitroApp) => {
     ingest(payload, { keys, allow }).catch(err => console.warn(`[mqtt] ${topic}: ${err.message}`))
   })
 
+  // retentionDays = 0 keeps the packet log forever
   const retentionMs = Number(config.retentionDays) * 86_400_000
-  const cleanup = setInterval(() => {
-    db.delete(schema.packets).where(lt(schema.packets.ts, new Date(Date.now() - retentionMs)))
-      .catch(err => console.error('[cleanup]', err.message))
-  }, 3_600_000)
+  const cleanup = retentionMs > 0
+    ? setInterval(() => {
+        db.delete(schema.packets).where(lt(schema.packets.ts, new Date(Date.now() - retentionMs)))
+          .catch(err => console.error('[cleanup]', err.message))
+      }, 3_600_000)
+    : undefined
 
   nitroApp.hooks.hook('close', async () => {
     clearInterval(cleanup)

@@ -22,3 +22,14 @@ logs
 .env
 .env.*
 !.env.example
+.vscode/*
+!.vscode/extensions.json
+*.swp
+Thumbs.db
+
+# TypeScript / tests
+*.tsbuildinfo
+coverage
+
+# Local docker overrides
+docker-compose.override.yml

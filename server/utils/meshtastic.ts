@@ -1,7 +1,7 @@
 import { createDecipheriv } from 'node:crypto'
 import { fromBinary } from '@bufbuild/protobuf'
 import { Config, Mesh, Mqtt, Portnums, Telemetry } from '@meshtastic/protobufs'
-import { eq } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 
 const { PortNum } = Portnums
 const DEFAULT_KEY = Buffer.from('1PG7OiApB1nwvP+rz05pAQ==', 'base64')
@@ -54,11 +54,40 @@ export interface IngestOptions {
   allow: Set<number>
 }
 
+interface Context {
+  now: Date
+  hops: number | null
+  snr: number | null
+  rssi: number | null
+  monitored: (num: number) => boolean
+}
+
+function userFields(payload: Uint8Array): NodeUpdate {
+  const user = fromBinary(Mesh.UserSchema, payload)
+  return {
+    longName: user.longName,
+    shortName: user.shortName,
+    hwModel: Mesh.HardwareModel[user.hwModel] ?? String(user.hwModel),
+    role: Config.Config_DeviceConfig_Role[user.role] ?? String(user.role)
+  }
+}
+
+function positionFields(payload: Uint8Array) {
+  const pos = fromBinary(Mesh.PositionSchema, payload)
+  if (!pos.latitudeI || !pos.longitudeI) return
+  return {
+    lat: pos.latitudeI / 1e7,
+    lon: pos.longitudeI / 1e7,
+    alt: pos.altitude ?? null,
+    sats: pos.satsInView || null
+  }
+}
+
 /** Decodes one MQTT message and stores whatever it carries. */
 export async function ingest(payload: Buffer, opts: IngestOptions) {
   const envelope = fromBinary(Mqtt.ServiceEnvelopeSchema, payload)
   const packet = envelope.packet
-  if (!packet || (opts.allow.size && !opts.allow.has(packet.from))) return
+  if (!packet) return
 
   const variant = packet.payloadVariant
   const data = variant.case === 'decoded'
@@ -67,8 +96,20 @@ export async function ingest(payload: Buffer, opts: IngestOptions) {
   if (!data) return
 
   const db = useDb()
-  const now = new Date()
-  const hops = packet.hopStart ? packet.hopStart - packet.hopLimit : null
+  const ctx: Context = {
+    now: new Date(),
+    hops: packet.hopStart ? packet.hopStart - packet.hopLimit : null,
+    rssi: nullIfZero(packet.rxRssi),
+    snr: packet.rxRssi ? packet.rxSnr : null,
+    monitored: num => !opts.allow.size || opts.allow.has(num)
+  }
+  const { now, hops } = ctx
+
+  // Before dedup: the same packet heard by another gateway is another RF link.
+  await recordLinks(envelope, packet, data, ctx)
+
+  if (!ctx.monitored(packet.from)) return updatePeer(packet.from, data, now)
+
   const packetRow = {
     packetId: packet.id,
     from: packet.from,
@@ -76,8 +117,8 @@ export async function ingest(payload: Buffer, opts: IngestOptions) {
     portnum: PortNum[data.portnum] ?? String(data.portnum),
     channel: envelope.channelId || null,
     gateway: envelope.gatewayId || null,
-    rssi: nullIfZero(packet.rxRssi),
-    snr: packet.rxRssi ? packet.rxSnr : null,
+    rssi: ctx.rssi,
+    snr: ctx.snr,
     hops,
     ts: now
   }
@@ -93,22 +134,14 @@ export async function ingest(payload: Buffer, opts: IngestOptions) {
   }
 
   switch (data.portnum) {
-    case PortNum.NODEINFO_APP: {
-      const user = fromBinary(Mesh.UserSchema, data.payload)
-      Object.assign(update, {
-        longName: user.longName,
-        shortName: user.shortName,
-        hwModel: Mesh.HardwareModel[user.hwModel] ?? String(user.hwModel),
-        role: Config.Config_DeviceConfig_Role[user.role] ?? String(user.role)
-      })
+    case PortNum.NODEINFO_APP:
+      Object.assign(update, userFields(data.payload))
       break
-    }
     case PortNum.POSITION_APP: {
-      const pos = fromBinary(Mesh.PositionSchema, data.payload)
-      if (!pos.latitudeI || !pos.longitudeI) break
-      const row = { lat: pos.latitudeI / 1e7, lon: pos.longitudeI / 1e7, alt: pos.altitude ?? null }
-      await db.insert(schema.positions).values({ nodeNum: packet.from, ts: now, sats: pos.satsInView || null, ...row })
-      Object.assign(update, row, { positionAt: now })
+      const pos = positionFields(data.payload)
+      if (!pos) break
+      await db.insert(schema.positions).values({ nodeNum: packet.from, ts: now, ...pos })
+      Object.assign(update, { lat: pos.lat, lon: pos.lon, alt: pos.alt, positionAt: now })
       break
     }
     case PortNum.TELEMETRY_APP: {
@@ -142,11 +175,78 @@ export async function ingest(payload: Buffer, opts: IngestOptions) {
   }
 
   await db.insert(schema.nodes)
-    .values({ num: packet.from, id: numToId(packet.from), ...update })
+    .values({ num: packet.from, id: numToId(packet.from), monitored: true, ...update })
     .onDuplicateKeyUpdate({ set: update })
 
   const [node] = await db.select().from(schema.nodes).where(eq(schema.nodes.num, packet.from))
   const [stored] = await db.select().from(schema.packets).where(eq(schema.packets.id, res.insertId))
   if (stored) meshBus.emit('event', { type: 'packet', packet: stored })
   if (node) meshBus.emit('event', { type: 'node', node })
+}
+
+/** Nodes outside NUXT_NODE_IDS: keep only what's needed to place them on the map / measure links. */
+async function updatePeer(num: number, data: Mesh.Data, now: Date) {
+  let update: NodeUpdate | undefined
+  if (data.portnum === PortNum.NODEINFO_APP) update = userFields(data.payload)
+  if (data.portnum === PortNum.POSITION_APP) {
+    const pos = positionFields(data.payload)
+    if (pos) update = { lat: pos.lat, lon: pos.lon, alt: pos.alt, positionAt: now }
+  }
+  if (!update) return
+  await useDb().insert(schema.nodes)
+    .values({ num, id: numToId(num), ...update })
+    .onDuplicateKeyUpdate({ set: update })
+}
+
+type LinkRow = Pick<typeof schema.links.$inferInsert, 'fromNum' | 'toNum' | 'source' | 'snr' | 'rssi'>
+
+/** relayNode only carries the last byte of the relayer's ID; accept it if exactly one known node matches. */
+async function resolveRelayer(lastByte: number, exclude: number[]) {
+  const { nodes } = schema
+  const rows = await useDb().select({ num: nodes.num }).from(nodes)
+    .where(sql`(${nodes.num} & 255) = ${lastByte & 0xff}`)
+  const candidates = rows.map(r => r.num).filter(n => !exclude.includes(n))
+  return candidates.length === 1 ? candidates[0] : undefined
+}
+
+/** Finds direct (0-hop) RF links this packet proves, and upserts them. */
+async function recordLinks(envelope: Mqtt.ServiceEnvelope, packet: Mesh.MeshPacket, data: Mesh.Data, ctx: Context) {
+  const found: LinkRow[] = []
+  const gateway = envelope.gatewayId ? parseNodeId(envelope.gatewayId) : undefined
+
+  if (gateway !== undefined && gateway !== packet.from && !packet.viaMqtt && ctx.hops !== null) {
+    if (ctx.hops === 0) {
+      found.push({ fromNum: packet.from, toNum: gateway, source: 'direct', snr: ctx.snr, rssi: ctx.rssi })
+    } else if (ctx.hops === 1 && packet.relayNode) {
+      const relayer = await resolveRelayer(packet.relayNode, [packet.from, gateway])
+      if (relayer !== undefined) {
+        found.push(
+          { fromNum: packet.from, toNum: relayer, source: 'relay', snr: null, rssi: null },
+          { fromNum: relayer, toNum: gateway, source: 'direct', snr: ctx.snr, rssi: ctx.rssi }
+        )
+      }
+    }
+  }
+
+  if (data.portnum === PortNum.NEIGHBORINFO_APP) {
+    for (const n of fromBinary(Mesh.NeighborInfoSchema, data.payload).neighbors) {
+      if (n.nodeId && n.nodeId !== packet.from) {
+        found.push({ fromNum: n.nodeId, toNum: packet.from, source: 'neighbor', snr: n.snr, rssi: null })
+      }
+    }
+  }
+
+  const { links } = schema
+  for (const link of found) {
+    if (!ctx.monitored(link.fromNum) && !ctx.monitored(link.toNum)) continue
+    const set: Partial<typeof links.$inferInsert> = { lastSeen: ctx.now, count: sql`${links.count} + 1` as any }
+    if (link.snr != null) set.snr = link.snr
+    if (link.rssi != null) set.rssi = link.rssi
+    if (link.source !== 'relay') set.source = link.source // relay is the weakest evidence
+    await useDb().insert(links)
+      .values({ ...link, firstSeen: ctx.now, lastSeen: ctx.now })
+      .onDuplicateKeyUpdate({ set })
+    const [enriched] = await queryLinks(and(eq(links.fromNum, link.fromNum), eq(links.toNum, link.toNum)))
+    if (enriched) meshBus.emit('event', { type: 'link', link: enriched })
+  }
 }
