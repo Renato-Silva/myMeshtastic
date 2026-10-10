@@ -12,19 +12,18 @@ export interface ChartSeries { name: string, data: [string, number | null][] }
 const props = defineProps<{ title: string, unit: string, series: ChartSeries[], digits?: number }>()
 
 const colorMode = useColorMode()
-const css = (name: string) => import.meta.client
-  ? getComputedStyle(document.documentElement).getPropertyValue(name).trim()
-  : ''
+const THEME = {
+  light: { text: '#52514e', grid: '#e4e3df', series: ['#2a78d6', '#eb6834'] },
+  dark: { text: '#c3c2b7', grid: '#383835', series: ['#3987e5', '#d95926'] }
+}
 
 const hasData = computed(() => props.series.some(s => s.data.some(([, v]) => v != null)))
 
 const option = computed(() => {
-  void colorMode.value // re-theme on light/dark switch
-  const text = css('--chart-text')
-  const grid = css('--chart-grid')
+  const { text, grid, series } = THEME[colorMode.value === 'dark' ? 'dark' : 'light']
   const multi = props.series.length > 1
   return {
-    color: [css('--series-1'), css('--series-2')],
+    color: series,
     textStyle: { color: text },
     grid: { left: 8, right: 16, top: multi ? 36 : 16, bottom: 8, containLabel: true },
     legend: multi ? { top: 0, left: 0, icon: 'roundRect', textStyle: { color: text } } : undefined,

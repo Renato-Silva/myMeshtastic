@@ -15,6 +15,13 @@
       "when": 1791592922597,
       "tag": "0001_links",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1791593395211,
+      "tag": "0002_packets_dedupe_window",
+      "breakpoints": true
     }
   ]
 }

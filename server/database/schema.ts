@@ -1,4 +1,4 @@
-import { mysqlTable, mysqlEnum, int, varchar, double, float, datetime, serial, boolean, index, uniqueIndex, primaryKey } from 'drizzle-orm/mysql-core'
+import { mysqlTable, mysqlEnum, int, varchar, double, float, datetime, serial, boolean, index, primaryKey } from 'drizzle-orm/mysql-core'
 
 const ts = (name = 'ts') => datetime(name, { mode: 'date' })
 
@@ -71,7 +71,7 @@ export const envMetrics = mysqlTable('env_metrics', {
   lux: float('lux')
 }, t => [index('env_node_ts').on(t.nodeNum, t.ts)])
 
-/** Raw packet log. The unique key also deduplicates packets uplinked by several gateways. */
+/** Raw packet log. Duplicates from several gateways are filtered in ingest() using packets_from_id. */
 export const packets = mysqlTable('packets', {
   id: serial('id').primaryKey(),
   packetId: int('packet_id', { unsigned: true }).notNull(),
@@ -85,7 +85,7 @@ export const packets = mysqlTable('packets', {
   hops: int('hops'),
   ts: ts().notNull()
 }, t => [
-  uniqueIndex('packets_from_id').on(t.from, t.packetId),
+  index('packets_from_id').on(t.from, t.packetId),
   index('packets_ts').on(t.ts)
 ])
 

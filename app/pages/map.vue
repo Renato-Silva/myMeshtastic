@@ -1,7 +1,6 @@
 <script setup lang="ts">
-const { nodes, links } = useMesh()
+const { nodes } = useMesh()
 const showTrails = ref(false)
-const showLinks = ref(true)
 const range = ref('24h')
 
 const { data: positions } = await useFetch('/api/positions', {
@@ -10,7 +9,6 @@ const { data: positions } = await useFetch('/api/positions', {
   watch: [range, showTrails],
   default: () => []
 })
-watch(showTrails, on => on && !positions.value.length && refreshNuxtData())
 
 const trails = computed(() => {
   if (!showTrails.value) return {}
@@ -23,12 +21,11 @@ const trails = computed(() => {
 <template>
   <div class="space-y-4">
     <div class="flex flex-wrap items-center gap-4">
-      <USwitch v-model="showLinks" label="RF links (0 hops)" />
       <USwitch v-model="showTrails" label="Show trails" />
       <USelect v-if="showTrails" v-model="range" :items="['6h', '24h', '7d', '30d']" class="w-24" />
     </div>
     <ClientOnly>
-      <MeshMap :nodes="nodes" :trails="trails" :links="showLinks ? links : []" height="calc(100vh - 11rem)" />
+      <MeshMap :nodes="nodes" :trails="trails" height="calc(100vh - 11rem)" />
     </ClientOnly>
   </div>
 </template>

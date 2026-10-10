@@ -1,15 +1,2 @@
 @import "tailwindcss";
 @import "@nuxt/ui";
-
-:root {
-  --chart-grid: #e4e3df;
-  --chart-text: #52514e;
-  --series-1: #2a78d6;
-  --series-2: #eb6834;
-}
-.dark {
-  --chart-grid: #383835;
-  --chart-text: #c3c2b7;
-  --series-1: #3987e5;
-  --series-2: #d95926;
-}

@@ -1,19 +1,21 @@
 import { createDecipheriv } from 'node:crypto'
 import { fromBinary } from '@bufbuild/protobuf'
 import { Config, Mesh, Mqtt, Portnums, Telemetry } from '@meshtastic/protobufs'
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq, gte, sql } from 'drizzle-orm'
 
 const { PortNum } = Portnums
 const DEFAULT_KEY = Buffer.from('1PG7OiApB1nwvP+rz05pAQ==', 'base64')
 
 export const numToId = (num: number) => '!' + num.toString(16).padStart(8, '0')
 
-/** Accepts "!a0cc2ad0", "a0cc2ad0" or a decimal node number. */
+/** Accepts "!a0cc2ad0", "a0cc2ad0" or a 9-10 digit decimal node number. */
 export function parseNodeId(value: string): number | undefined {
   const v = value.trim().replace(/^!/, '')
-  if (!v) return
-  const num = /^\d+$/.test(v) && v.length > 8 ? Number(v) : Number.parseInt(v, 16)
-  return Number.isFinite(num) ? num : undefined
+  if (/^\d{9,10}$/.test(v)) {
+    const num = Number(v)
+    return num <= 0xffffffff ? num : undefined
+  }
+  if (/^[0-9a-f]{1,8}$/i.test(v)) return Number.parseInt(v, 16)
 }
 
 /** Expands a base64 channel PSK the way the firmware does (1-byte keys are shorthand for the default key). */
@@ -41,6 +43,9 @@ function decrypt(packet: Mesh.MeshPacket, encrypted: Uint8Array, keys: Buffer[])
     } catch {}
   }
 }
+
+/** Copies of one packet from several gateways arrive within seconds; IDs can repeat over months. */
+const DEDUPE_WINDOW_MS = 3_600_000
 
 const nullIfZero = (v: number | undefined) => (v ? v : null)
 const defined = <T extends object>(obj: T) =>
@@ -98,7 +103,7 @@ export async function ingest(payload: Buffer, opts: IngestOptions) {
   const db = useDb()
   const ctx: Context = {
     now: new Date(),
-    hops: packet.hopStart ? packet.hopStart - packet.hopLimit : null,
+    hops: packet.hopStart && packet.hopStart >= packet.hopLimit ? packet.hopStart - packet.hopLimit : null,
     rssi: nullIfZero(packet.rxRssi),
     snr: packet.rxRssi ? packet.rxSnr : null,
     monitored: num => !opts.allow.size || opts.allow.has(num)
@@ -122,8 +127,14 @@ export async function ingest(payload: Buffer, opts: IngestOptions) {
     hops,
     ts: now
   }
-  const [res] = await db.insert(schema.packets).ignore().values(packetRow)
-  if (res.affectedRows === 0) return // duplicate seen via another gateway
+  const { packets } = schema
+  const [duplicate] = await db.select({ id: packets.id }).from(packets).where(and(
+    eq(packets.from, packet.from),
+    eq(packets.packetId, packet.id),
+    gte(packets.ts, new Date(now.getTime() - DEDUPE_WINDOW_MS))
+  )).limit(1)
+  if (duplicate) return // same packet already uplinked by another gateway
+  const [res] = await db.insert(packets).values(packetRow)
 
   const update: NodeUpdate = {
     lastHeard: now,
