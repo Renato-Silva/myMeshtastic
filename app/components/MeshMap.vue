@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import type { Map as LeafletMap } from 'leaflet'
+import { destination, rangeOutline, rangeRings } from '#shared/utils/geo'
 
 const props = withDefaults(defineProps<{
   nodes: MeshNode[]
   trails?: Record<number, [number, number][]>
   links?: MeshLink[]
   height?: string
+  /** Range plot around the first node: outline of its farthest direct links per direction, plus distance rings. */
+  rangePlot?: boolean
 }>(), { height: '400px' })
 
 const now = useNow()
@@ -21,6 +24,17 @@ const peers = computed(() => {
     for (const p of [l.from, l.to]) if (!shown.has(p.num)) out.set(p.num, p)
   }
   return [...out.values()]
+})
+
+const center = computed(() => located.value[0] && [located.value[0].lat!, located.value[0].lon!] as [number, number])
+const outline = computed(() => props.rangePlot && center.value
+  ? rangeOutline(center.value, drawnLinks.value.flatMap(l => [l.from, l.to]).filter(p => p.num !== located.value[0]!.num).map(p => [p.lat!, p.lon!] as [number, number]))
+  : [])
+const rings = computed(() => {
+  if (!props.rangePlot || !center.value) return []
+  const c = center.value
+  const max = Math.max(0, ...drawnLinks.value.map(l => l.distanceKm!))
+  return max ? rangeRings(max).map(km => ({ km, label: destination(c[0], c[1], 0, km) })) : []
 })
 
 const points = computed(() => [
@@ -65,6 +79,21 @@ watch(pointsKey, fit)
         attribution="&copy; OpenStreetMap contributors"
         layer-type="base"
         name="OpenStreetMap"
+      />
+      <template v-for="r in rings" :key="`ring-${r.km}`">
+        <LCircle :lat-lng="center!" :radius="r.km * 1000" color="#57534e" :weight="1" :opacity="0.6" :fill="false" :interactive="false" />
+        <LCircleMarker :lat-lng="r.label" :radius="0" :opacity="0">
+          <LTooltip :options="{ permanent: true, direction: 'center', className: 'range-ring-label' }">{{ fmtKm(r.km) }}</LTooltip>
+        </LCircleMarker>
+      </template>
+      <LPolygon
+        v-if="outline.length"
+        :lat-lngs="outline"
+        color="#2a78d6"
+        :weight="2"
+        fill-color="#2a78d6"
+        :fill-opacity="0.15"
+        :interactive="false"
       />
       <LPolyline
         v-for="(points, num) in trails"

@@ -70,6 +70,7 @@ const nodeLinks = computed(() => links.value.filter(l => l.fromNum === num || l.
         </div>
       </div>
       <UBadge :color="status.color" :icon="status.icon" variant="subtle" size="lg" :label="`${status.label} · ${timeAgo(node.lastHeard, now)}`" />
+      <UButton :to="`/n/${num}`" icon="i-lucide-presentation" color="neutral" variant="outline" label="Landing page" />
     </div>
 
     <UCard>

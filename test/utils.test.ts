@@ -92,3 +92,16 @@ test('mergeById keeps live rows that arrived during a refetch', () => {
   const out = mergeById([r(3, 'new'), r(2), r(1)], [r(4), r(3, 'old'), r(1)])
   assert.deepEqual(out, [r(4), r(3, 'new'), r(2), r(1)])
 })
+
+test('rangeOutline joins the farthest peer per sector and dips to the centre in gaps', async () => {
+  const { rangeOutline, rangeRings, destination, bearingDeg } = await import('../shared/utils/geo.ts')
+  const c: [number, number] = [41, -8]
+  const north = destination(...c, 0, 10)
+  const northNear = destination(...c, 2, 3)
+  const east = destination(...c, 90, 5)
+  assert.ok(Math.abs(bearingDeg(...c, ...east) - 90) < 0.1)
+  assert.deepEqual(rangeOutline(c, [north]), [])
+  assert.deepEqual(rangeOutline(c, [northNear, north, east]), [north, c, east, c])
+  assert.deepEqual(rangeRings(9.6), [2.5, 5, 7.5, 10])
+  assert.deepEqual(rangeRings(30), [10, 20, 30])
+})
