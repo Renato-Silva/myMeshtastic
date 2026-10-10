@@ -39,28 +39,28 @@ All settings come from environment variables (see `.env.example`):
 
 ## Production
 
-### Proxmox VE
+### Proxmox VE (LXC)
 
-Run this as root on the Proxmox host. It creates an unprivileged Debian LXC container, installs Node.js 24,
-builds the app and starts it as the `mymeshtastic` systemd service on port 3000:
-
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/Renato-Silva/myMeshtastic/master/scripts/proxmox.sh)"
-```
-
-Optional variables: `CTID`, `CT_HOSTNAME`, `STORAGE` (rootfs; defaults to the first storage that holds containers),
-`BRIDGE` (`vmbr0`), `IP` (`dhcp`, or e.g. `192.168.1.50/24` plus `GATEWAY`), `MEMORY` (2048 MB; the build peaks
-at ~1.7 GB, while the server itself uses ~100 MB), `CORES`, `DISK` (8 GB), `ENV_FILE` (a local `.env` to copy in),
-and `REPO_URL` / `BRANCH`.
-
-Settings live in `/opt/mymeshtastic/.env` (run `systemctl restart mymeshtastic` after editing it), and the
-database lives in `/var/lib/mymeshtastic/mesh.db`. To update, run the same script again inside the container:
+Works like the [community-scripts.org](https://community-scripts.org) helpers, and uses their engine. Run this in
+the Proxmox host shell:
 
 ```bash
-pct exec <ctid> -- bash /opt/mymeshtastic/scripts/proxmox.sh
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/Renato-Silva/myMeshtastic/master/ct/mymeshtastic.sh)"
 ```
 
-The script also works directly in any Debian or Ubuntu VM or container.
+Pick *Default* (Debian 13, unprivileged, 2 CPU, 2 GB RAM, 6 GB disk) or *Advanced* to change the container ID,
+storage, network, resources and so on. The 2 GB is for the build, which peaks at ~1.7 GB; the server uses ~100 MB.
+When it finishes, it prints the dashboard URL (`http://<ip>:3000`).
+
+Inside the container:
+
+- Settings: edit `/opt/mymeshtastic/.env` (at least `NUXT_NODE_IDS` and `NUXT_CHANNEL_KEYS`), then
+  run `systemctl restart mymeshtastic`
+- Update to the latest `master`: `update`
+- Logs: `journalctl -u mymeshtastic -f`
+- Database: `/var/lib/mymeshtastic/mesh.db`
+
+The scripts are `ct/mymeshtastic.sh` (runs on the host) and `install/mymeshtastic-install.sh` (runs in the container).
 
 ### Docker
 
