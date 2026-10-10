@@ -1,9 +1,8 @@
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import mqtt, { type MqttClient } from 'mqtt'
-import { lt } from 'drizzle-orm'
-import { migrate } from 'drizzle-orm/mysql2/migrator'
-import { redactUrl } from '../database/url'
+import { inArray, lt } from 'drizzle-orm'
+import { migrate } from 'drizzle-orm/sqlite-proxy/migrator'
 
 /** Messages waiting for the database; beyond this they're dropped so a stalled DB can't exhaust memory. */
 const MAX_PENDING = 10_000
@@ -28,23 +27,16 @@ export default defineNitroPlugin((nitroApp) => {
     await client?.endAsync().catch(() => {})
     // Let already-received messages finish, but don't hang shutdown on a dead database.
     await Promise.race([queue, sleep(10_000, undefined, { ref: false })])
-    await closeDb()
+    closeDb()
   })
 
-  // Nitro doesn't await plugins, so start in the background and retry until MySQL is reachable.
+  // Nitro doesn't await plugins, so start in the background.
   start().catch(err => console.error('[mqtt] failed to start:', err))
 
   async function start() {
-    while (!stopped) {
-      try {
-        await migrate(db, { migrationsFolder: join(process.cwd(), 'server/database/migrations') })
-        break
-      } catch (err) {
-        console.error(`[db] not ready (${(err as Error).message}), retrying in 5s`)
-        await sleep(5000)
-      }
-    }
-    if (stopped) return
+    await migrate(db, async queries => execMigrations(queries), {
+      migrationsFolder: join(process.cwd(), 'server/database/migrations')
+    })
 
     const keys = String(config.channelKeys).split(',').map(expandKey).filter((k): k is Buffer => !!k)
     const allow = new Set(String(config.nodeIds).split(',').map(parseNodeId).filter((n): n is number => n !== undefined))
@@ -54,7 +46,7 @@ export default defineNitroPlugin((nitroApp) => {
       await db.update(schema.nodes).set({ monitored: false })
       await db.insert(schema.nodes)
         .values([...allow].map(num => ({ num, id: numToId(num), monitored: true })))
-        .onDuplicateKeyUpdate({ set: { monitored: true } })
+        .onConflictDoUpdate({ target: schema.nodes.num, set: { monitored: true } })
     } else {
       await db.update(schema.nodes).set({ monitored: true })
     }
@@ -121,13 +113,16 @@ export default defineNitroPlugin((nitroApp) => {
     }
   }
 
-  /** Deletes in batches so a large backlog doesn't hold one long lock on the packets table. */
+  /** Deletes in batches so a large backlog doesn't block ingest with one long write. */
   async function prunePackets(before: Date) {
+    const { packets } = schema
     let total = 0
     while (!stopped) {
-      const [res] = await db.delete(schema.packets).where(lt(schema.packets.ts, before)).limit(RETENTION_BATCH)
-      total += res.affectedRows
-      if (res.affectedRows < RETENTION_BATCH) break
+      const batch = db.select({ id: packets.id }).from(packets).where(lt(packets.ts, before)).limit(RETENTION_BATCH)
+      const deleted = await db.delete(packets).where(inArray(packets.id, batch)).returning({ id: packets.id })
+      total += deleted.length
+      if (deleted.length < RETENTION_BATCH) break
+      await sleep(0)
     }
     if (total) console.info(`[cleanup] deleted ${total} packet(s) older than ${before.toISOString()}`)
   }

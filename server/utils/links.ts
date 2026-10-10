@@ -1,5 +1,5 @@
 import { and, eq, gte, type SQL } from 'drizzle-orm'
-import { alias } from 'drizzle-orm/mysql-core'
+import { alias } from 'drizzle-orm/sqlite-core'
 
 const LINK_WINDOW_MS = 30 * 86_400_000
 

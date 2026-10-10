@@ -1,7 +1,7 @@
 import { createDecipheriv } from 'node:crypto'
 import { fromBinary } from '@bufbuild/protobuf'
 import { Config, Mesh, Mqtt, Portnums, Telemetry } from '@meshtastic/protobufs'
-import { and, eq, gte, sql } from 'drizzle-orm'
+import { and, eq, gte, sql, type SQL } from 'drizzle-orm'
 
 const { PortNum } = Portnums
 const DEFAULT_KEY = Buffer.from('1PG7OiApB1nwvP+rz05pAQ==', 'base64')
@@ -156,7 +156,7 @@ export async function ingest(payload: Buffer, opts: IngestOptions) {
     ts: now
   }
   if (await seen(schema.packets, packet, now)) return
-  const [res] = await db.insert(schema.packets).values(packetRow)
+  const [stored] = await db.insert(schema.packets).values(packetRow).returning()
 
   const update: NodeUpdate = {
     lastHeard: now,
@@ -215,13 +215,12 @@ export async function ingest(payload: Buffer, opts: IngestOptions) {
     }
   }
 
-  await db.insert(schema.nodes)
+  const [node] = await db.insert(schema.nodes)
     .values({ num: packet.from, id: numToId(packet.from), monitored: true, ...update })
-    .onDuplicateKeyUpdate({ set: update })
+    .onConflictDoUpdate({ target: schema.nodes.num, set: update })
+    .returning()
 
   meshStatus.lastNodePacketAt = now
-  const [node] = await db.select().from(schema.nodes).where(eq(schema.nodes.num, packet.from))
-  const [stored] = await db.select().from(schema.packets).where(eq(schema.packets.id, res.insertId))
   if (stored) meshBus.emit('event', { type: 'packet', data: stored })
   if (node) meshBus.emit('event', { type: 'node', data: node })
 }
@@ -244,13 +243,11 @@ async function handleMapReport(num: number, payload: Uint8Array, ctx: Context) {
   if (r.latitudeI && r.longitudeI) {
     Object.assign(update, { lat: r.latitudeI / 1e7, lon: r.longitudeI / 1e7, alt: r.altitude || null, positionAt: ctx.now })
   }
-  await useDb().insert(schema.nodes)
+  const [node] = await useDb().insert(schema.nodes)
     .values({ num, id: numToId(num), monitored: ctx.monitored(num), ...update })
-    .onDuplicateKeyUpdate({ set: update })
-  if (ctx.monitored(num)) {
-    const [node] = await useDb().select().from(schema.nodes).where(eq(schema.nodes.num, num))
-    if (node) meshBus.emit('event', { type: 'node', data: node })
-  }
+    .onConflictDoUpdate({ target: schema.nodes.num, set: update })
+    .returning()
+  if (node?.monitored) meshBus.emit('event', { type: 'node', data: node })
 }
 
 async function storeMessage(envelope: Mqtt.ServiceEnvelope, packet: Mesh.MeshPacket, data: Mesh.Data, ctx: Context) {
@@ -268,8 +265,8 @@ async function storeMessage(envelope: Mqtt.ServiceEnvelope, packet: Mesh.MeshPac
     snr: ctx.snr,
     hops: ctx.hops,
     ts: ctx.now
-  })
-  const [message] = await queryMessages(eq(schema.messages.id, res.insertId), 1)
+  }).returning({ id: schema.messages.id })
+  const [message] = await queryMessages(eq(schema.messages.id, res!.id), 1)
   if (message) meshBus.emit('event', { type: 'message', data: message })
 }
 
@@ -288,7 +285,7 @@ async function storeTraceroute(envelope: Mqtt.ServiceEnvelope, packet: Mesh.Mesh
     gateway: envelope.gatewayId || null,
     ts: ctx.now
   }
-  const [res] = await useDb().insert(schema.traceroutes).values(row)
+  const [res] = await useDb().insert(schema.traceroutes).values(row).returning({ id: schema.traceroutes.id })
 
   // Every consecutive pair on the path is a direct RF hop; snr[i] is measured by the receiver of hop i.
   // The request went requester (packet.to) → traced node (packet.from); the reply came back.
@@ -304,7 +301,7 @@ async function storeTraceroute(envelope: Mqtt.ServiceEnvelope, packet: Mesh.Mesh
   }
   await upsertLinks(found, ctx)
 
-  const [trace] = await queryTraceroutes(eq(schema.traceroutes.id, res.insertId), 1)
+  const [trace] = await queryTraceroutes(eq(schema.traceroutes.id, res!.id), 1)
   if (trace) meshBus.emit('event', { type: 'traceroute', data: trace })
 }
 
@@ -319,7 +316,7 @@ async function updatePeer(num: number, data: Mesh.Data, now: Date) {
   if (!update) return
   await useDb().insert(schema.nodes)
     .values({ num, id: numToId(num), ...update })
-    .onDuplicateKeyUpdate({ set: update })
+    .onConflictDoUpdate({ target: schema.nodes.num, set: update })
 }
 
 type LinkRow = Pick<typeof schema.links.$inferInsert, 'fromNum' | 'toNum' | 'source' | 'snr' | 'rssi'>
@@ -365,22 +362,23 @@ async function recordLinks(envelope: Mqtt.ServiceEnvelope, packet: Mesh.MeshPack
 
 /** Weakest to strongest evidence that a link is direct; a link keeps its strongest source. */
 const SOURCE_ORDER = ['relay', 'traceroute', 'neighbor', 'direct'] as const
+const sourceRank = (source: SQL) =>
+  sql`CASE ${source} ${sql.join(SOURCE_ORDER.map((s, i) => sql`WHEN ${s} THEN ${i}`), sql` `)} END`
 
 async function upsertLinks(found: LinkRow[], ctx: Context) {
   const { links } = schema
   for (const link of found) {
     if (!ctx.monitored(link.fromNum) && !ctx.monitored(link.toNum)) continue
-    const rank = SOURCE_ORDER.indexOf(link.source) + 1
     const set: Partial<typeof links.$inferInsert> = {
       lastSeen: ctx.now,
       count: sql`${links.count} + 1` as any,
-      source: sql`IF(FIELD(${links.source}, ${sql.join(SOURCE_ORDER.map(s => sql`${s}`), sql`, `)}) > ${rank}, ${links.source}, ${link.source})` as any
+      source: sql`CASE WHEN ${sourceRank(sql`${links.source}`)} > ${SOURCE_ORDER.indexOf(link.source)} THEN ${links.source} ELSE ${link.source} END` as any
     }
     if (link.snr != null) set.snr = link.snr
     if (link.rssi != null) set.rssi = link.rssi
     await useDb().insert(links)
       .values({ ...link, firstSeen: ctx.now, lastSeen: ctx.now })
-      .onDuplicateKeyUpdate({ set })
+      .onConflictDoUpdate({ target: [links.fromNum, links.toNum], set })
     const [enriched] = await queryLinks(and(eq(links.fromNum, link.fromNum), eq(links.toNum, link.toNum)))
     if (enriched) meshBus.emit('event', { type: 'link', data: enriched })
   }

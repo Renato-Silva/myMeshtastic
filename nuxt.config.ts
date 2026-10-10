@@ -39,8 +39,8 @@ export default defineNuxtConfig({
   },
   // Every key can be overridden with NUXT_<SNAKE_CASE> env vars (see .env.example)
   runtimeConfig: {
-    // Empty = DB_HOST/DB_DATABASE/... (Forge) or the local docker-compose database, see server/database/url.ts
-    databaseUrl: '',
+    // SQLite file, relative to the working directory
+    databasePath: '.data/mesh.db',
     mqttUrl: 'mqtt://mqtt.meshtastic.pt:1883',
     mqttUsername: 'meshdev',
     mqttPassword: 'large4cats',

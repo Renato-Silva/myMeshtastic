@@ -13,6 +13,8 @@ ENV NODE_ENV=production \
     PORT=3000
 COPY --from=build --chown=node:node /app/.output ./.output
 COPY --from=build --chown=node:node /app/server/database/migrations ./server/database/migrations
+RUN mkdir .data && chown node:node .data
+VOLUME /app/.data
 USER node
 EXPOSE 3000
 # /api/health is 503 while MQTT is down, so this also flags a lost broker

@@ -1,21 +1,20 @@
 # myMeshtastic
 
 Dashboard for a Meshtastic mesh, fed from an MQTT broker. It decodes (and decrypts) packets from the broker,
-stores nodes, telemetry, positions, messages, traceroutes and RF links in MySQL, and pushes live updates to the
+stores nodes, telemetry, positions, messages, traceroutes and RF links in SQLite, and pushes live updates to the
 browser over Server-Sent Events.
 
-Stack: Nuxt 4 (Nitro server + Vue), Drizzle ORM, MySQL 8, mqtt.js.
+Stack: Nuxt 4 (Nitro server + Vue), Drizzle ORM, SQLite (built-in `node:sqlite`, no native modules), mqtt.js.
 
 ## Development
 
 ```bash
 cp .env.example .env          # adjust broker, channel keys and node IDs
-docker compose up -d db       # MySQL on 127.0.0.1:3308
 npm install
 npm run dev                   # http://localhost:3000
 ```
 
-Migrations run automatically on startup. After changing `server/database/schema.ts`, run `npm run db:generate`
+The database is created at `.data/mesh.db`. Migrations run automatically on startup. After changing `server/database/schema.ts`, run `npm run db:generate`
 and commit the new file in `server/database/migrations`.
 
 ```bash
@@ -30,7 +29,7 @@ All settings come from environment variables (see `.env.example`):
 
 | Variable | Default | |
 |---|---|---|
-| `NUXT_DATABASE_URL` | local compose DB | Or Forge-style `DB_HOST` / `DB_PORT` / `DB_DATABASE` / `DB_USERNAME` / `DB_PASSWORD` |
+| `NUXT_DATABASE_PATH` | `.data/mesh.db` | SQLite file, relative to the working directory |
 | `NUXT_MQTT_URL` | `mqtt://mqtt.meshtastic.pt:1883` | Credentials in the URL are redacted in logs and `/api/health` |
 | `NUXT_MQTT_USERNAME` / `NUXT_MQTT_PASSWORD` | public `meshdev` login | |
 | `NUXT_MQTT_TOPIC` | `msh/#` | |
@@ -40,25 +39,47 @@ All settings come from environment variables (see `.env.example`):
 
 ## Production
 
+### Proxmox VE
+
+Run this as root on the Proxmox host. It creates an unprivileged Debian LXC container, installs Node.js 24,
+builds the app and starts it as the `mymeshtastic` systemd service on port 3000:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/Renato-Silva/myMeshtastic/master/scripts/proxmox.sh)"
+```
+
+Optional variables: `CTID`, `CT_HOSTNAME`, `STORAGE` (rootfs; defaults to the first storage that holds containers),
+`BRIDGE` (`vmbr0`), `IP` (`dhcp`, or e.g. `192.168.1.50/24` plus `GATEWAY`), `MEMORY` (2048 MB; the build peaks
+at ~1.7 GB, while the server itself uses ~100 MB), `CORES`, `DISK` (8 GB), `ENV_FILE` (a local `.env` to copy in),
+and `REPO_URL` / `BRANCH`.
+
+Settings live in `/opt/mymeshtastic/.env` (run `systemctl restart mymeshtastic` after editing it), and the
+database lives in `/var/lib/mymeshtastic/mesh.db`. To update, run the same script again inside the container:
+
+```bash
+pct exec <ctid> -- bash /opt/mymeshtastic/scripts/proxmox.sh
+```
+
+The script also works directly in any Debian or Ubuntu VM or container.
+
 ### Docker
 
 ```bash
-# set MYSQL_PASSWORD and MYSQL_ROOT_PASSWORD in .env first
-docker compose --profile prod up -d --build
+docker compose up -d --build     # database in the "data" volume
 ```
 
 The app listens on `127.0.0.1:3000` by default; put a TLS reverse proxy in front, or set `APP_BIND=0.0.0.0`.
 The image runs as a non-root user and has a healthcheck on `/api/health`.
 
-### Bare Node (e.g. Forge)
+### Bare Node
 
 ```bash
 npm ci && npm run build
-node .output/server/index.mjs     # reads .env from the working directory
+node .output/server/index.mjs     # reads .env and creates .data/ in the working directory
 ```
 
-Run one instance only: live updates go through an in-process event bus, and each instance would ingest the
-same MQTT traffic.
+Run one instance only: live updates go through an in-process event bus, each instance would ingest the
+same MQTT traffic, and SQLite expects a single writer.
 
 If nginx proxies the app, `/api/stream` sends `X-Accel-Buffering: no`, so no special SSE config is needed.
 Keep `proxy_read_timeout` above 30s, because the stream sends a keep-alive every 25s.

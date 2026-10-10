@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { expandKey, numToId, parseNodeId } from '../server/utils/meshtastic.ts'
 import { bucketRows, dedupePositions } from '../server/utils/range.ts'
-import { redactUrl, resolveDatabaseUrl } from '../server/database/url.ts'
+import { redactUrl } from '../server/utils/redact.ts'
 
 test('parseNodeId accepts !hex, hex and decimal', () => {
   assert.equal(parseNodeId('!a0cc2ad0'), 0xa0cc2ad0)
@@ -23,19 +23,9 @@ test('expandKey expands 1-byte PSK shorthand like the firmware', () => {
 })
 
 test('redactUrl hides passwords only', () => {
-  assert.equal(redactUrl('mysql://u:p%40ss@h:3306/db'), 'mysql://u:***@h:3306/db')
+  assert.equal(redactUrl('mqtts://u:p%40ss@h:8883'), 'mqtts://u:***@h:8883')
   assert.equal(redactUrl('mqtt://user:secret@broker:1883'), 'mqtt://user:***@broker:1883')
   assert.equal(redactUrl('mqtt://broker:1883'), 'mqtt://broker:1883')
-})
-
-test('resolveDatabaseUrl precedence', () => {
-  assert.equal(resolveDatabaseUrl({}, 'mysql://a@b/c'), 'mysql://a@b/c')
-  assert.equal(resolveDatabaseUrl({ NUXT_DATABASE_URL: 'mysql://x@y/z' }), 'mysql://x@y/z')
-  assert.equal(
-    resolveDatabaseUrl({ DB_HOST: 'db', DB_DATABASE: 'mesh', DB_USERNAME: 'me', DB_PASSWORD: 'p@ss' }),
-    'mysql://me:p%40ss@db:3306/mesh'
-  )
-  assert.equal(resolveDatabaseUrl({}), 'mysql://mesh:mesh@localhost:3308/meshtastic')
 })
 
 test('bucketRows averages numeric fields per bucket', () => {
