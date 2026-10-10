@@ -8,7 +8,17 @@ export default defineNuxtPlugin(() => {
   // After a reconnect, resync whatever changed while the stream was down.
   source.addEventListener('ready', async () => {
     if (!reconnect) return void (reconnect = true)
-    ;[nodes.value, links.value] = await Promise.all([$fetch<MeshNode[]>('/api/nodes'), $fetch<MeshLink[]>('/api/links')])
+    // Pages that load their own lists (messages, traceroutes) refetch on this
+    meshEvents!.dispatchEvent(new Event('resync'))
+    const [freshNodes, freshLinks, freshPackets] = await Promise.all([
+      $fetch<MeshNode[]>('/api/nodes'),
+      $fetch<MeshLink[]>('/api/links'),
+      // Only if the packets page already loaded them
+      packets.value.length ? $fetch<MeshPacket[]>('/api/packets', { query: { limit: 200 } }) : undefined
+    ])
+    nodes.value = freshNodes
+    links.value = freshLinks
+    if (freshPackets) packets.value = mergeById(freshPackets, packets.value).slice(0, 500)
   })
   source.addEventListener('status', e => (status.value = JSON.parse(e.data)))
   source.addEventListener('node', e => upsertNode(JSON.parse(e.data)))

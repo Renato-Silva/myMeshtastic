@@ -1,7 +1,8 @@
 import { createDecipheriv } from 'node:crypto'
 import { fromBinary } from '@bufbuild/protobuf'
 import { Config, Mesh, Mqtt, Portnums, Telemetry } from '@meshtastic/protobufs'
-import { and, eq, gte, sql, type SQL } from 'drizzle-orm'
+import { and, eq, gte, or, sql, type SQL } from 'drizzle-orm'
+import type { MeshEvent } from './bus'
 
 const { PortNum } = Portnums
 const DEFAULT_KEY = Buffer.from('1PG7OiApB1nwvP+rz05pAQ==', 'base64')
@@ -67,11 +68,15 @@ export interface IngestOptions {
 
 interface Context {
   now: Date
+  /** Identifies the packet across gateways' copies: "from:id". */
+  packetKey: string
   hops: number | null
   snr: number | null
   rssi: number | null
   gateway: number | undefined
   monitored: (num: number) => boolean
+  /** Sent to SSE clients once the message's writes are committed. */
+  events: MeshEvent[]
 }
 
 function userFields(payload: Uint8Array): NodeUpdate {
@@ -118,21 +123,30 @@ export async function ingest(payload: Buffer, opts: IngestOptions) {
     : variant.case === 'encrypted' ? decrypt(packet, variant.value, opts.keys) : undefined
   if (!data) return
 
-  const db = useDb()
   const ctx: Context = {
     now: new Date(),
+    packetKey: `${packet.from}:${packet.id}`,
     hops: packet.hopStart && packet.hopStart >= packet.hopLimit ? packet.hopStart - packet.hopLimit : null,
     rssi: nullIfZero(packet.rxRssi),
     snr: packet.rxRssi ? packet.rxSnr : null,
     gateway: envelope.gatewayId ? parseNodeId(envelope.gatewayId) : undefined,
-    monitored: num => !opts.allow.size || opts.allow.has(num)
+    monitored: num => !opts.allow.size || opts.allow.has(num),
+    events: []
   }
+
+  // All of one message's writes or none, and one commit instead of one per write
+  await transaction(() => store(envelope, packet, data, ctx))
+  for (const e of ctx.events) meshBus.emit('event', e)
+}
+
+async function store(envelope: Mqtt.ServiceEnvelope, packet: Mesh.MeshPacket, data: Mesh.Data, ctx: Context) {
+  const db = useDb()
   const { now, hops } = ctx
 
   // Map reports come straight from an MQTT-connected node, not over RF.
   if (data.portnum === PortNum.MAP_REPORT_APP) return handleMapReport(packet.from, data.payload, ctx)
 
-  // Before dedup: the same packet heard by another gateway is another RF link.
+  // Before dedup: the same packet heard by another gateway is another RF link (upsertLinks skips repeats of the same one).
   await recordLinks(envelope, packet, data, ctx)
 
   // Messages and traceroutes are kept when any of our nodes sent, received or uplinked them.
@@ -221,8 +235,8 @@ export async function ingest(payload: Buffer, opts: IngestOptions) {
     .returning()
 
   meshStatus.lastNodePacketAt = now
-  if (stored) meshBus.emit('event', { type: 'packet', data: stored })
-  if (node) meshBus.emit('event', { type: 'node', data: node })
+  if (stored) ctx.events.push({ type: 'packet', data: stored })
+  if (node) ctx.events.push({ type: 'node', data: node })
 }
 
 /** Firmware, region, preset and position, published by nodes with MQTT map reporting on. */
@@ -247,7 +261,7 @@ async function handleMapReport(num: number, payload: Uint8Array, ctx: Context) {
     .values({ num, id: numToId(num), monitored: ctx.monitored(num), ...update })
     .onConflictDoUpdate({ target: schema.nodes.num, set: update })
     .returning()
-  if (node?.monitored) meshBus.emit('event', { type: 'node', data: node })
+  if (node?.monitored) ctx.events.push({ type: 'node', data: node })
 }
 
 async function storeMessage(envelope: Mqtt.ServiceEnvelope, packet: Mesh.MeshPacket, data: Mesh.Data, ctx: Context) {
@@ -267,7 +281,7 @@ async function storeMessage(envelope: Mqtt.ServiceEnvelope, packet: Mesh.MeshPac
     ts: ctx.now
   }).returning({ id: schema.messages.id })
   const [message] = await queryMessages(eq(schema.messages.id, res!.id), 1)
-  if (message) meshBus.emit('event', { type: 'message', data: message })
+  if (message) ctx.events.push({ type: 'message', data: message })
 }
 
 async function storeTraceroute(envelope: Mqtt.ServiceEnvelope, packet: Mesh.MeshPacket, data: Mesh.Data, ctx: Context) {
@@ -302,7 +316,7 @@ async function storeTraceroute(envelope: Mqtt.ServiceEnvelope, packet: Mesh.Mesh
   await upsertLinks(found, ctx)
 
   const [trace] = await queryTraceroutes(eq(schema.traceroutes.id, res!.id), 1)
-  if (trace) meshBus.emit('event', { type: 'traceroute', data: trace })
+  if (trace) ctx.events.push({ type: 'traceroute', data: trace })
 }
 
 /** Nodes outside NUXT_NODE_IDS: keep only what's needed to place them on the map / measure links. */
@@ -365,10 +379,30 @@ const SOURCE_ORDER = ['relay', 'traceroute', 'neighbor', 'direct'] as const
 const sourceRank = (source: SQL) =>
   sql`CASE ${source} ${sql.join(SOURCE_ORDER.map((s, i) => sql`WHEN ${s} THEN ${i}`), sql` `)} END`
 
+/**
+ * "packet>from>to" → when it was counted. Links are recorded before dedup, but each packet should count
+ * once per link: every gateway that hears a NeighborInfo, or a packet via the same relayer, reports the same hop.
+ */
+const countedLinks = new Map<string, number>()
+
+/** False if this packet already counted for this link (another gateway's copy). */
+export function firstCount(key: string, now: number) {
+  // Entries are in time order (one message at a time), so expired ones are at the front
+  for (const [k, at] of countedLinks) {
+    if (now - at < DEDUPE_WINDOW_MS) break
+    countedLinks.delete(k)
+  }
+  if (countedLinks.has(key)) return false
+  countedLinks.set(key, now)
+  return true
+}
+
 async function upsertLinks(found: LinkRow[], ctx: Context) {
   const { links } = schema
+  const upserted: SQL[] = []
   for (const link of found) {
     if (!ctx.monitored(link.fromNum) && !ctx.monitored(link.toNum)) continue
+    if (!firstCount(`${ctx.packetKey}>${link.fromNum}>${link.toNum}`, ctx.now.getTime())) continue
     const set: Partial<typeof links.$inferInsert> = {
       lastSeen: ctx.now,
       count: sql`${links.count} + 1` as any,
@@ -379,7 +413,9 @@ async function upsertLinks(found: LinkRow[], ctx: Context) {
     await useDb().insert(links)
       .values({ ...link, firstSeen: ctx.now, lastSeen: ctx.now })
       .onConflictDoUpdate({ target: [links.fromNum, links.toNum], set })
-    const [enriched] = await queryLinks(and(eq(links.fromNum, link.fromNum), eq(links.toNum, link.toNum)))
-    if (enriched) meshBus.emit('event', { type: 'link', data: enriched })
+    upserted.push(and(eq(links.fromNum, link.fromNum), eq(links.toNum, link.toNum))!)
   }
+  // One read for all of them, with names and distances, for the SSE clients
+  if (!upserted.length) return
+  for (const enriched of await queryLinks(or(...upserted))) ctx.events.push({ type: 'link', data: enriched })
 }

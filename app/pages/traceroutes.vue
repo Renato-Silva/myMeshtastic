@@ -1,6 +1,9 @@
 <script setup lang="ts">
 const { data: traces } = await useFetch<MeshTraceroute[]>('/api/traceroutes', { default: () => [] })
 useMeshEvent<MeshTraceroute>('traceroute', t => traces.value.unshift(t))
+useMeshEvent('resync', async () => {
+  traces.value = mergeById(await $fetch<MeshTraceroute[]>('/api/traceroutes'), traces.value)
+})
 const now = useNow()
 
 // The request went requester (to) → traced node (from); the reply came back.

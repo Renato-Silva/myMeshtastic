@@ -23,15 +23,43 @@ const peers = computed(() => {
   return [...out.values()]
 })
 
-function fit(map: LeafletMap) {
-  const points = [...located.value, ...peers.value].map(n => [n.lat!, n.lon!] as [number, number])
-  if (points.length) map.fitBounds(points, { padding: [40, 40], maxZoom: 15 })
+const points = computed(() => [
+  ...[...located.value, ...peers.value].map(n => [n.lat!, n.lon!] as [number, number]),
+  ...Object.values(props.trails ?? {}).flat()
+])
+// Changes when a node gains or moves its position, or trails load; not on every telemetry update
+const pointsKey = computed(() => {
+  const ends = [...located.value, ...peers.value].map(n => `${n.num}:${n.lat},${n.lon}`)
+  const trails = Object.entries(props.trails ?? {}).map(([num, t]) => `${num}:${t.length}`)
+  return [...ends, ...trails].join('|')
+})
+
+let map: LeafletMap | undefined
+/** Once the user pans or zooms, leave the view alone. */
+let userMoved = false
+let fitting = false
+
+function fit() {
+  if (!map || userMoved || !points.value.length) return
+  fitting = true
+  map.fitBounds(points.value, { padding: [40, 40], maxZoom: 15 })
 }
+
+function onReady(m: LeafletMap) {
+  map = m
+  m.on('zoomstart dragstart', () => {
+    if (!fitting) userMoved = true
+  })
+  m.on('moveend', () => (fitting = false))
+  fit()
+}
+
+watch(pointsKey, fit)
 </script>
 
 <template>
   <div class="overflow-hidden rounded-lg border border-default" :style="{ height }">
-    <LMap :zoom="8" :center="[39.5, -8]" :use-global-leaflet="false" @ready="fit">
+    <LMap :zoom="8" :center="[39.5, -8]" :use-global-leaflet="false" @ready="onReady">
       <LTileLayer
         url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
         attribution="&copy; OpenStreetMap contributors"

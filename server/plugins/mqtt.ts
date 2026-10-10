@@ -17,8 +17,15 @@ export default defineNitroPlugin((nitroApp) => {
   let cleanup: ReturnType<typeof setInterval> | undefined
   let retry: ReturnType<typeof setTimeout> | undefined
   let stopped = false
-  // One message at a time: dedup and relay resolution read what earlier messages wrote.
+  // One message at a time: dedup and relay resolution read what earlier messages wrote,
+  // and each message is a transaction on the one shared connection.
   let queue = Promise.resolve()
+  /** Runs fn after everything already queued; for writes outside ingest that mustn't land inside its transaction. */
+  function enqueue<T>(fn: () => Promise<T>) {
+    const run = queue.then(fn)
+    queue = run.then(() => {}, () => {})
+    return run
+  }
 
   nitroApp.hooks.hook('close', async () => {
     stopped = true
@@ -119,7 +126,7 @@ export default defineNitroPlugin((nitroApp) => {
     let total = 0
     while (!stopped) {
       const batch = db.select({ id: packets.id }).from(packets).where(lt(packets.ts, before)).limit(RETENTION_BATCH)
-      const deleted = await db.delete(packets).where(inArray(packets.id, batch)).returning({ id: packets.id })
+      const deleted = await enqueue(() => db.delete(packets).where(inArray(packets.id, batch)).returning({ id: packets.id }))
       total += deleted.length
       if (deleted.length < RETENTION_BATCH) break
       await sleep(0)

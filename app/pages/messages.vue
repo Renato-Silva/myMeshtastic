@@ -1,6 +1,9 @@
 <script setup lang="ts">
 const { data: messages } = await useFetch<MeshMessage[]>('/api/messages', { query: { limit: 300 }, default: () => [] })
 useMeshEvent<MeshMessage>('message', m => messages.value.unshift(m))
+useMeshEvent('resync', async () => {
+  messages.value = mergeById(await $fetch<MeshMessage[]>('/api/messages', { query: { limit: 300 } }), messages.value)
+})
 
 const now = useNow()
 const { nodes } = useMesh()

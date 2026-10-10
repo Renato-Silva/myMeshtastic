@@ -15,14 +15,16 @@ export default defineEventHandler(async (event) => {
 
   const [environment, device, local, power, air] = await Promise.all([
     db.select().from(env).where(and(eq(env.nodeNum, num), gte(env.ts, since))).orderBy(asc(env.ts)),
-    db.select().from(dev).where(and(eq(dev.nodeNum, num), gte(dev.ts, since))).orderBy(asc(dev.ts)),
+    // From a day earlier, so a session already running at the start of the range gets its real start
+    db.select().from(dev).where(and(eq(dev.nodeNum, num), gte(dev.ts, new Date(since.getTime() - 86_400_000)))).orderBy(asc(dev.ts)),
     extraOf('local'),
     extraOf('power'),
     extraOf('air')
   ])
   return {
     environment: bucketRows(environment, bucketMs),
-    device: bucketRows(device, bucketMs),
+    device: bucketRows(device.filter(r => r.ts >= since), bucketMs),
+    charging: chargeSessions(device).filter(c => c.end >= since),
     local: bucketRows(local, bucketMs) as { ts: Date, [key: string]: number | Date }[],
     power: bucketRows(power, bucketMs) as { ts: Date, [key: string]: number | Date }[],
     air: bucketRows(air, bucketMs) as { ts: Date, [key: string]: number | Date }[]

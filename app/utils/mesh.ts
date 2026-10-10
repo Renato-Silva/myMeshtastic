@@ -98,7 +98,15 @@ export function fmtKm(km: number) {
   return km < 1 ? `${Math.round(km * 1000)} m` : `${Number(km.toFixed(km < 10 ? 2 : 1))} km`
 }
 
+/** Refetched rows plus any live ones that arrived meanwhile, newest first, without duplicates. */
+export function mergeById<T extends { id: number }>(fetched: T[], current: T[]) {
+  const byId = new Map(current.map(r => [r.id, r]))
+  for (const r of fetched) byId.set(r.id, r)
+  return [...byId.values()].sort((a, b) => b.id - a.id)
+}
+
 export const BROADCAST = 0xffffffff
+// Unnamed nodes fall back to the last 4 hex digits of their id, like the firmware's default short name
 export const shortLabel = (n: NodeName | undefined, num?: number) =>
-  n?.shortName || n?.id || (num != null ? '!' + num.toString(16).padStart(8, '0') : '?')
+  n?.shortName || n?.id?.slice(-4) || (num != null ? num.toString(16).padStart(8, '0').slice(-4) : '?')
 export const longLabel = (n: NodeName | undefined) => n?.longName || n?.id || '?'

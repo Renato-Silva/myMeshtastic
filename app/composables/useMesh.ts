@@ -21,10 +21,10 @@ export function useMesh() {
   return { nodes, packets, links, status, connected, upsertNode, upsertLink }
 }
 
-/** Live events that pages load themselves (messages, traceroutes) are re-dispatched here. */
+/** Live events that pages load themselves (messages, traceroutes) are re-dispatched here, plus "resync" after a reconnect. */
 export const meshEvents = import.meta.client ? new EventTarget() : undefined
 
-export function useMeshEvent<T>(type: 'message' | 'traceroute', handler: (data: T) => void) {
+export function useMeshEvent<T>(type: 'message' | 'traceroute' | 'resync', handler: (data: T) => void) {
   const listener = (e: Event) => handler((e as CustomEvent<T>).detail)
   onMounted(() => meshEvents?.addEventListener(type, listener))
   onBeforeUnmount(() => meshEvents?.removeEventListener(type, listener))

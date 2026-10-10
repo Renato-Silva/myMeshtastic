@@ -2,14 +2,16 @@
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { LineChart } from 'echarts/charts'
-import { GridComponent, TooltipComponent, LegendComponent, DataZoomComponent } from 'echarts/components'
+import { GridComponent, TooltipComponent, LegendComponent, DataZoomComponent, MarkAreaComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
 
-use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent, DataZoomComponent])
+use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent, DataZoomComponent, MarkAreaComponent])
 
 export interface ChartSeries { name: string, data: [string, number | null][] }
+/** Shaded time span behind the lines, e.g. a charging session. */
+export interface ChartBand { start: string, end: string, color: string }
 
-const props = defineProps<{ title: string, unit: string, series: ChartSeries[], digits?: number }>()
+const props = defineProps<{ title: string, unit: string, series: ChartSeries[], digits?: number, bands?: ChartBand[] }>()
 
 const colorMode = useColorMode()
 const THEME = {
@@ -55,14 +57,17 @@ const option = computed(() => {
       splitLine: { lineStyle: { color: grid } }
     },
     dataZoom: [{ type: 'inside' }],
-    series: props.series.map(s => ({
+    series: props.series.map((s, i) => ({
       name: s.name,
       type: 'line',
       data: s.data,
       showSymbol: false,
       symbolSize: 8,
       lineStyle: { width: 2 },
-      connectNulls: true
+      connectNulls: true,
+      markArea: i === 0 && props.bands?.length
+        ? { silent: true, data: props.bands.map(b => [{ xAxis: b.start, itemStyle: { color: b.color } }, { xAxis: b.end }]) }
+        : undefined
     }))
   }
 })
@@ -72,7 +77,10 @@ const option = computed(() => {
   <UCard :ui="{ body: 'p-4 sm:p-4' }">
     <p class="mb-2 text-sm font-medium">{{ title }}</p>
     <ClientOnly>
-      <VChart v-if="hasData" :option="option" autoresize class="h-56" />
+      <!-- Sized by the wrapper: vue-echarts' unlayered CSS (height: 100%) beats Tailwind utilities on the element -->
+      <div v-if="hasData" class="h-56">
+        <VChart :option="option" autoresize />
+      </div>
       <div v-else class="flex h-56 items-center justify-center text-sm text-muted">No data in this range</div>
     </ClientOnly>
   </UCard>

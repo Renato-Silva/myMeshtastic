@@ -15,11 +15,10 @@ const { data: telemetry, refresh: refreshTelemetry } = await useFetch(`/api/node
 const { data: track, refresh: refreshTrack } = await useFetch(`/api/nodes/${num}/positions`, { query: { range }, default: () => [] })
 const { data: packets, refresh: refreshPackets } = await useFetch('/api/packets', { query: { node: num, limit: 50 }, default: () => [] })
 
-watch(() => node.value.lastHeard, () => {
-  refreshTelemetry()
-  refreshTrack()
-  refreshPackets()
-})
+// Refetch only what the latest packet changed: a year of telemetry is too much to reload on every packet.
+watch(() => node.value.lastHeard, () => refreshPackets())
+watch(() => node.value.positionAt, () => refreshTrack())
+watch(() => [node.value.deviceAt, node.value.envAt, node.value.localStats?.ts, node.value.powerMetrics?.ts, node.value.airQuality?.ts].join(), () => refreshTelemetry())
 
 const series = <T extends { ts: string }>(rows: T[] | undefined, key: keyof T, name: string) =>
   ({ name, data: (rows ?? []).map(r => [r.ts, r[key] as number | null] as [string, number | null]) })
@@ -42,6 +41,14 @@ const presentSeries = (rows: Row[], keys: [string, string][]) =>
   keys.filter(([k]) => has(rows, k)).map(([k, name]) => series(rows, k, name))
 const powerChannels = (suffix: 'Voltage' | 'Current') =>
   presentSeries(power.value, Array.from({ length: 8 }, (_, i) => [`ch${i + 1}${suffix}`, `Ch ${i + 1}`] as [string, string]))
+// Kept when the range is empty so the charts can say "No data in this range"
+const hasPower = computed(() => !!node.value.deviceAt || dev.value.length > 0 || power.value.length > 0)
+const sessions = computed(() => [...(telemetry.value?.charging ?? [])].reverse())
+const ongoing = computed(() => sessions.value.find(c => c.ongoing))
+const chargedMs = computed(() => sessions.value.reduce((t, c) => t + Date.parse(c.end) - Date.parse(c.start), 0))
+const CHARGE_COLOR = { external: 'rgba(235, 161, 0, 0.14)', charging: 'rgba(27, 175, 122, 0.14)' }
+const bands = computed(() => sessions.value.map(c => ({ start: c.start, end: c.end, color: CHARGE_COLOR[c.kind] })))
+const sessionMs = (c: { start: string, end: string }) => Date.parse(c.end) - Date.parse(c.start)
 const ls = computed(() => node.value.localStats as Record<string, number> | null)
 const nodeLinks = computed(() => links.value.filter(l => l.fromNum === num || l.toNum === num))
 </script>
@@ -86,14 +93,65 @@ const nodeLinks = computed(() => links.value.filter(l => l.fromNum === num || l.
       <UTabs v-model="range" :items="RANGES.map(v => ({ label: v, value: v }))" :content="false" size="sm" />
     </div>
 
+    <template v-if="hasPower">
+      <div>
+        <h3 class="text-sm font-semibold">Power</h3>
+        <p class="text-xs text-muted">
+          <span class="inline-block size-2 rounded-sm bg-[rgba(27,175,122,0.5)]" /> charging (voltage rising)
+          · <span class="inline-block size-2 rounded-sm bg-[rgba(235,161,0,0.5)]" /> on external power
+        </p>
+      </div>
+      <UCard>
+        <div class="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <MetricTile
+            :icon="ongoing ? 'i-lucide-battery-charging' : 'i-lucide-battery'"
+            label="Now"
+            :value="ongoing ? (ongoing.kind === 'external' ? 'External power' : 'Charging') : dev.length ? 'On battery' : '—'"
+            :hint="ongoing ? `since ${formatDateTime(ongoing.start, true)}` : undefined"
+          />
+          <MetricTile
+            icon="i-lucide-plug-zap"
+            label="Last charge"
+            :value="ongoing ? 'now' : sessions[0] ? timeAgo(sessions[0].end, now) : 'none in range'"
+            :hint="sessions[0] && !ongoing ? `${formatDateTime(sessions[0].start, true)}, ${formatUptime(sessionMs(sessions[0]) / 1000)}` : undefined"
+          />
+          <MetricTile icon="i-lucide-timer" label="Time charging" :value="sessions.length ? formatUptime(chargedMs / 1000) : '—'" :hint="`in the last ${range}`" />
+          <MetricTile icon="i-lucide-list" label="Sessions" :value="sessions.length" />
+        </div>
+      </UCard>
+      <div class="grid gap-4 md:grid-cols-2">
+        <MetricChart title="Battery" unit="%" :digits="0" :bands="bands" :series="[{ name: 'Battery', data: dev.map(r => [r.ts, r.battery == null ? null : Math.min(r.battery, 100)] as [string, number | null]) }]" />
+        <MetricChart title="Voltage" unit="V" :digits="2" :bands="bands" :series="[series(dev, 'voltage', 'Voltage')]" />
+        <MetricChart v-if="powerChannels('Voltage').length" title="Power sensor voltage" unit="V" :digits="2" :bands="bands" :series="powerChannels('Voltage')" />
+        <MetricChart v-if="powerChannels('Current').length" title="Power sensor current" unit="mA" :digits="0" :bands="bands" :series="powerChannels('Current')" />
+      </div>
+      <UCard v-if="sessions.length" :ui="{ body: 'p-0 sm:p-0' }">
+        <div class="max-h-72 overflow-auto">
+          <table class="w-full text-sm">
+            <thead class="sticky top-0 bg-default text-left text-xs text-muted">
+              <tr><th class="px-4 py-2">Started</th><th class="px-4 py-2">Ended</th><th class="px-4 py-2">Duration</th><th class="px-4 py-2">Type</th><th class="px-4 py-2">Voltage</th></tr>
+            </thead>
+            <tbody class="divide-y divide-default tabular-nums">
+              <tr v-for="c in sessions" :key="c.start">
+                <td class="px-4 py-2">{{ formatDateTime(c.start, true) }}</td>
+                <td class="px-4 py-2">{{ c.ongoing ? 'ongoing' : formatDateTime(c.end, true) }}</td>
+                <td class="px-4 py-2">{{ formatUptime(sessionMs(c) / 1000) }}</td>
+                <td class="px-4 py-2">{{ c.kind === 'external' ? 'External power' : 'Charging' }}</td>
+                <td class="px-4 py-2">{{ c.fromV != null && c.toV != null ? `${fmt(c.fromV, ' V', 2)} → ${fmt(c.toV, ' V', 2)}` : '—' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </UCard>
+    </template>
+
+    <h3 class="text-sm font-semibold">Environment & radio</h3>
     <div class="grid gap-4 md:grid-cols-2">
       <MetricChart v-if="has(env, 'temperature')" title="Temperature" unit="°C" :series="[series(env, 'temperature', 'Temperature')]" />
       <MetricChart v-if="has(env, 'humidity')" title="Relative humidity" unit="%" :digits="0" :series="[series(env, 'humidity', 'Humidity')]" />
       <MetricChart v-if="has(env, 'pressure')" title="Barometric pressure" unit="hPa" :series="[series(env, 'pressure', 'Pressure')]" />
       <MetricChart v-if="has(env, 'iaq')" title="Air quality (IAQ)" unit="" :digits="0" :series="[series(env, 'iaq', 'IAQ')]" />
       <MetricChart v-if="has(env, 'lux')" title="Light" unit="lx" :series="[series(env, 'lux', 'Lux')]" />
-      <MetricChart title="Battery" unit="%" :digits="0" :series="[{ name: 'Battery', data: dev.map(r => [r.ts, r.battery == null ? null : Math.min(r.battery, 100)] as [string, number | null]) }]" />
-      <MetricChart title="Voltage" unit="V" :digits="2" :series="[series(dev, 'voltage', 'Voltage')]" />
       <MetricChart
         title="Channel utilisation & airtime"
         unit="%"
@@ -127,14 +185,6 @@ const nodeLinks = computed(() => links.value.filter(l => l.fromNum === num || l.
         />
         <MetricChart v-if="has(local, 'noiseFloor')" title="Noise floor" unit="dBm" :digits="0" :series="[series(local, 'noiseFloor', 'Noise floor')]" />
         <MetricChart v-if="has(local, 'numOnlineNodes')" title="Nodes online" unit="" :digits="0" :series="[series(local, 'numOnlineNodes', 'Online')]" />
-      </div>
-    </template>
-
-    <template v-if="power.length">
-      <h2 class="font-semibold">Power sensors</h2>
-      <div class="grid gap-4 md:grid-cols-2">
-        <MetricChart v-if="powerChannels('Voltage').length" title="Voltage" unit="V" :digits="2" :series="powerChannels('Voltage')" />
-        <MetricChart v-if="powerChannels('Current').length" title="Current" unit="mA" :digits="0" :series="powerChannels('Current')" />
       </div>
     </template>
 
