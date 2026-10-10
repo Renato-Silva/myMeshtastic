@@ -55,6 +55,8 @@ function update_script() {
   # .env is untracked, so the reset keeps it
   $STD git reset --hard origin/master
   NODE_VERSION="24" setup_nodejs
+  # setup_nodejs leaves us in /opt
+  cd /opt/mymeshtastic || exit
   # npm ci occasionally fails on a stale node_modules or a network hiccup; retry once from scratch
   if ! $STD npm ci --no-audit --no-fund; then
     msg_warn "npm ci failed, retrying with a clean node_modules"
