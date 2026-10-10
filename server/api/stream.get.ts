@@ -1,17 +1,19 @@
 import type { MeshEvent } from '../utils/bus'
 
-/** Server-Sent Events: pushes node and packet updates as they arrive. */
+/** Server-Sent Events: pushes node, packet, link, message, traceroute and broker status updates. */
 export default defineEventHandler(async (event) => {
   const stream = createEventStream(event)
-  const listener = (e: MeshEvent) => stream.push({ event: e.type, data: JSON.stringify(e.type === 'node' ? e.node : e.type === 'packet' ? e.packet : e.link) })
-  meshBus.on('event', listener)
-  const ping = setInterval(() => stream.push({ event: 'ping', data: '' }), 25_000)
+  const send = (e: MeshEvent) => stream.push({ event: e.type, data: JSON.stringify(e.data) })
+  meshBus.on('event', send)
+  // Doubles as a keep-alive and keeps "last message" times in the header fresh.
+  const tick = setInterval(() => send({ type: 'status', data: { ...meshStatus } }), 25_000)
   stream.onClosed(() => {
-    clearInterval(ping)
-    meshBus.off('event', listener)
+    clearInterval(tick)
+    meshBus.off('event', send)
   })
   // Headers are only flushed with the first write, so send one right away
   // or the browser's EventSource never reaches "open" on a quiet mesh.
   stream.push({ event: 'ready', data: '' })
+  send({ type: 'status', data: { ...meshStatus } })
   return stream.send()
 })

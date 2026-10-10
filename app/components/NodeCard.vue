@@ -23,6 +23,7 @@ const hasEnv = computed(() => n.value.temperature != null || n.value.humidity !=
       <div class="flex flex-wrap gap-1.5">
         <UBadge variant="outline" color="neutral" size="sm" icon="i-lucide-cpu" :label="prettyEnum(n.hwModel) ?? 'Unknown device'" />
         <UBadge variant="outline" color="neutral" size="sm" icon="i-lucide-tag" :label="prettyEnum(n.role) ?? 'Unknown role'" />
+        <UBadge v-if="n.firmwareVersion" variant="outline" color="neutral" size="sm" icon="i-lucide-package" :label="n.firmwareVersion" />
       </div>
 
       <div class="grid grid-cols-3 gap-3">

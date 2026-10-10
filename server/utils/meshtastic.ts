@@ -5,6 +5,9 @@ import { and, eq, gte, sql } from 'drizzle-orm'
 
 const { PortNum } = Portnums
 const DEFAULT_KEY = Buffer.from('1PG7OiApB1nwvP+rz05pAQ==', 'base64')
+export const BROADCAST = 0xffffffff
+/** Traceroute SNRs are int8 × 4; this value means "unknown". */
+const SNR_UNKNOWN = -128
 
 export const numToId = (num: number) => '!' + num.toString(16).padStart(8, '0')
 
@@ -50,6 +53,9 @@ const DEDUPE_WINDOW_MS = 3_600_000
 const nullIfZero = (v: number | undefined) => (v ? v : null)
 const defined = <T extends object>(obj: T) =>
   Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as Partial<T>
+/** Numeric fields of a protobuf message, minus unset ones. */
+const numbers = (msg: object) =>
+  Object.fromEntries(Object.entries(msg).filter(([, v]) => typeof v === 'number')) as Record<string, number>
 
 type NodeUpdate = Partial<typeof schema.nodes.$inferInsert>
 
@@ -64,6 +70,7 @@ interface Context {
   hops: number | null
   snr: number | null
   rssi: number | null
+  gateway: number | undefined
   monitored: (num: number) => boolean
 }
 
@@ -88,6 +95,17 @@ function positionFields(payload: Uint8Array) {
   }
 }
 
+/** True if this packet was already stored (uplinked by another gateway) within the dedupe window. */
+async function seen(table: typeof schema.packets | typeof schema.messages | typeof schema.traceroutes, packet: Mesh.MeshPacket, now: Date) {
+  const t = table as typeof schema.packets
+  const [row] = await useDb().select({ id: t.id }).from(t).where(and(
+    eq(t.from, packet.from),
+    eq(t.packetId, packet.id),
+    gte(t.ts, new Date(now.getTime() - DEDUPE_WINDOW_MS))
+  )).limit(1)
+  return !!row
+}
+
 /** Decodes one MQTT message and stores whatever it carries. */
 export async function ingest(payload: Buffer, opts: IngestOptions) {
   const envelope = fromBinary(Mqtt.ServiceEnvelopeSchema, payload)
@@ -106,12 +124,22 @@ export async function ingest(payload: Buffer, opts: IngestOptions) {
     hops: packet.hopStart && packet.hopStart >= packet.hopLimit ? packet.hopStart - packet.hopLimit : null,
     rssi: nullIfZero(packet.rxRssi),
     snr: packet.rxRssi ? packet.rxSnr : null,
+    gateway: envelope.gatewayId ? parseNodeId(envelope.gatewayId) : undefined,
     monitored: num => !opts.allow.size || opts.allow.has(num)
   }
   const { now, hops } = ctx
 
+  // Map reports come straight from an MQTT-connected node, not over RF.
+  if (data.portnum === PortNum.MAP_REPORT_APP) return handleMapReport(packet.from, data.payload, ctx)
+
   // Before dedup: the same packet heard by another gateway is another RF link.
   await recordLinks(envelope, packet, data, ctx)
+
+  // Messages and traceroutes are kept when any of our nodes sent, received or uplinked them.
+  const relevant = ctx.monitored(packet.from) || ctx.monitored(packet.to)
+    || (ctx.gateway !== undefined && ctx.monitored(ctx.gateway))
+  if (relevant && data.portnum === PortNum.TEXT_MESSAGE_APP) await storeMessage(envelope, packet, data, ctx)
+  if (relevant && data.portnum === PortNum.TRACEROUTE_APP && data.requestId) await storeTraceroute(envelope, packet, data, ctx)
 
   if (!ctx.monitored(packet.from)) return updatePeer(packet.from, data, now)
 
@@ -127,14 +155,8 @@ export async function ingest(payload: Buffer, opts: IngestOptions) {
     hops,
     ts: now
   }
-  const { packets } = schema
-  const [duplicate] = await db.select({ id: packets.id }).from(packets).where(and(
-    eq(packets.from, packet.from),
-    eq(packets.packetId, packet.id),
-    gte(packets.ts, new Date(now.getTime() - DEDUPE_WINDOW_MS))
-  )).limit(1)
-  if (duplicate) return // same packet already uplinked by another gateway
-  const [res] = await db.insert(packets).values(packetRow)
+  if (await seen(schema.packets, packet, now)) return
+  const [res] = await db.insert(schema.packets).values(packetRow)
 
   const update: NodeUpdate = {
     lastHeard: now,
@@ -180,6 +202,14 @@ export async function ingest(payload: Buffer, opts: IngestOptions) {
         })
         await db.insert(schema.envMetrics).values({ nodeNum: packet.from, ts: now, ...row })
         Object.assign(update, row, { envAt: now })
+      } else if (t.case === 'localStats' || t.case === 'powerMetrics' || t.case === 'airQualityMetrics') {
+        const kind = ({ localStats: 'local', powerMetrics: 'power', airQualityMetrics: 'air' } as const)[t.case]
+        const metrics = numbers(t.value)
+        if (!Object.keys(metrics).length) break
+        await db.insert(schema.extraMetrics).values({ nodeNum: packet.from, ts: now, kind, data: metrics })
+        const snapshot = { ...metrics, ts: now.toISOString() }
+        const column = ({ local: 'localStats', power: 'powerMetrics', air: 'airQuality' } as const)[kind]
+        update[column] = snapshot
       }
       break
     }
@@ -189,10 +219,93 @@ export async function ingest(payload: Buffer, opts: IngestOptions) {
     .values({ num: packet.from, id: numToId(packet.from), monitored: true, ...update })
     .onDuplicateKeyUpdate({ set: update })
 
+  meshStatus.lastNodePacketAt = now
   const [node] = await db.select().from(schema.nodes).where(eq(schema.nodes.num, packet.from))
   const [stored] = await db.select().from(schema.packets).where(eq(schema.packets.id, res.insertId))
-  if (stored) meshBus.emit('event', { type: 'packet', packet: stored })
-  if (node) meshBus.emit('event', { type: 'node', node })
+  if (stored) meshBus.emit('event', { type: 'packet', data: stored })
+  if (node) meshBus.emit('event', { type: 'node', data: node })
+}
+
+/** Firmware, region, preset and position, published by nodes with MQTT map reporting on. */
+async function handleMapReport(num: number, payload: Uint8Array, ctx: Context) {
+  const r = fromBinary(Mqtt.MapReportSchema, payload)
+  const update: NodeUpdate = defined({
+    longName: r.longName || undefined,
+    shortName: r.shortName || undefined,
+    hwModel: Mesh.HardwareModel[r.hwModel] ?? String(r.hwModel),
+    role: Config.Config_DeviceConfig_Role[r.role] ?? String(r.role),
+    firmwareVersion: r.firmwareVersion || null,
+    region: Config.Config_LoRaConfig_RegionCode[r.region] ?? String(r.region),
+    modemPreset: Config.Config_LoRaConfig_ModemPreset[r.modemPreset] ?? String(r.modemPreset),
+    hasDefaultChannel: r.hasDefaultChannel,
+    onlineLocalNodes: r.numOnlineLocalNodes,
+    mapReportAt: ctx.now
+  })
+  if (r.latitudeI && r.longitudeI) {
+    Object.assign(update, { lat: r.latitudeI / 1e7, lon: r.longitudeI / 1e7, alt: r.altitude || null, positionAt: ctx.now })
+  }
+  await useDb().insert(schema.nodes)
+    .values({ num, id: numToId(num), monitored: ctx.monitored(num), ...update })
+    .onDuplicateKeyUpdate({ set: update })
+  if (ctx.monitored(num)) {
+    const [node] = await useDb().select().from(schema.nodes).where(eq(schema.nodes.num, num))
+    if (node) meshBus.emit('event', { type: 'node', data: node })
+  }
+}
+
+async function storeMessage(envelope: Mqtt.ServiceEnvelope, packet: Mesh.MeshPacket, data: Mesh.Data, ctx: Context) {
+  if (await seen(schema.messages, packet, ctx.now)) return
+  const [res] = await useDb().insert(schema.messages).values({
+    packetId: packet.id,
+    from: packet.from,
+    to: packet.to,
+    channel: envelope.channelId || null,
+    text: new TextDecoder().decode(data.payload),
+    replyId: data.replyId || null,
+    emoji: !!data.emoji,
+    gateway: envelope.gatewayId || null,
+    rssi: ctx.rssi,
+    snr: ctx.snr,
+    hops: ctx.hops,
+    ts: ctx.now
+  })
+  const [message] = await queryMessages(eq(schema.messages.id, res.insertId), 1)
+  if (message) meshBus.emit('event', { type: 'message', data: message })
+}
+
+async function storeTraceroute(envelope: Mqtt.ServiceEnvelope, packet: Mesh.MeshPacket, data: Mesh.Data, ctx: Context) {
+  if (await seen(schema.traceroutes, packet, ctx.now)) return
+  const rd = fromBinary(Mesh.RouteDiscoverySchema, data.payload)
+  const snr = (values: number[]) => values.map(v => (v === SNR_UNKNOWN ? null : v / 4))
+  const row = {
+    packetId: packet.id,
+    from: packet.from,
+    to: packet.to,
+    route: rd.route,
+    snrTowards: snr(rd.snrTowards),
+    routeBack: rd.routeBack,
+    snrBack: snr(rd.snrBack),
+    gateway: envelope.gatewayId || null,
+    ts: ctx.now
+  }
+  const [res] = await useDb().insert(schema.traceroutes).values(row)
+
+  // Every consecutive pair on the path is a direct RF hop; snr[i] is measured by the receiver of hop i.
+  // The request went requester (packet.to) → traced node (packet.from); the reply came back.
+  const forward = [packet.to, ...rd.route, packet.from]
+  const back = [packet.from, ...rd.routeBack, packet.to]
+  const found: LinkRow[] = []
+  for (const [path, snrs] of [[forward, row.snrTowards], [back, row.snrBack]] as const) {
+    if (snrs.length !== path.length - 1) continue // incomplete path
+    for (let i = 0; i < path.length - 1; i++) {
+      if (path[i] === BROADCAST || path[i + 1] === BROADCAST) continue
+      found.push({ fromNum: path[i]!, toNum: path[i + 1]!, source: 'traceroute', snr: snrs[i] ?? null, rssi: null })
+    }
+  }
+  await upsertLinks(found, ctx)
+
+  const [trace] = await queryTraceroutes(eq(schema.traceroutes.id, res.insertId), 1)
+  if (trace) meshBus.emit('event', { type: 'traceroute', data: trace })
 }
 
 /** Nodes outside NUXT_NODE_IDS: keep only what's needed to place them on the map / measure links. */
@@ -223,7 +336,7 @@ async function resolveRelayer(lastByte: number, exclude: number[]) {
 /** Finds direct (0-hop) RF links this packet proves, and upserts them. */
 async function recordLinks(envelope: Mqtt.ServiceEnvelope, packet: Mesh.MeshPacket, data: Mesh.Data, ctx: Context) {
   const found: LinkRow[] = []
-  const gateway = envelope.gatewayId ? parseNodeId(envelope.gatewayId) : undefined
+  const { gateway } = ctx
 
   if (gateway !== undefined && gateway !== packet.from && !packet.viaMqtt && ctx.hops !== null) {
     if (ctx.hops === 0) {
@@ -247,17 +360,28 @@ async function recordLinks(envelope: Mqtt.ServiceEnvelope, packet: Mesh.MeshPack
     }
   }
 
+  await upsertLinks(found, ctx)
+}
+
+/** Weakest to strongest evidence that a link is direct; a link keeps its strongest source. */
+const SOURCE_ORDER = ['relay', 'traceroute', 'neighbor', 'direct'] as const
+
+async function upsertLinks(found: LinkRow[], ctx: Context) {
   const { links } = schema
   for (const link of found) {
     if (!ctx.monitored(link.fromNum) && !ctx.monitored(link.toNum)) continue
-    const set: Partial<typeof links.$inferInsert> = { lastSeen: ctx.now, count: sql`${links.count} + 1` as any }
+    const rank = SOURCE_ORDER.indexOf(link.source) + 1
+    const set: Partial<typeof links.$inferInsert> = {
+      lastSeen: ctx.now,
+      count: sql`${links.count} + 1` as any,
+      source: sql`IF(FIELD(${links.source}, ${sql.join(SOURCE_ORDER.map(s => sql`${s}`), sql`, `)}) > ${rank}, ${links.source}, ${link.source})` as any
+    }
     if (link.snr != null) set.snr = link.snr
     if (link.rssi != null) set.rssi = link.rssi
-    if (link.source !== 'relay') set.source = link.source // relay is the weakest evidence
     await useDb().insert(links)
       .values({ ...link, firstSeen: ctx.now, lastSeen: ctx.now })
       .onDuplicateKeyUpdate({ set })
     const [enriched] = await queryLinks(and(eq(links.fromNum, link.fromNum), eq(links.toNum, link.toNum)))
-    if (enriched) meshBus.emit('event', { type: 'link', link: enriched })
+    if (enriched) meshBus.emit('event', { type: 'link', data: enriched })
   }
 }

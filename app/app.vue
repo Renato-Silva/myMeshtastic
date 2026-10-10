@@ -1,5 +1,5 @@
 <script setup lang="ts">
-const { nodes, links, connected } = useMesh()
+const { nodes, links } = useMesh()
 await callOnce('mesh-init', async () => {
   [nodes.value, links.value] = await Promise.all([$fetch<MeshNode[]>('/api/nodes'), $fetch<MeshLink[]>('/api/links')])
 })
@@ -7,6 +7,8 @@ await callOnce('mesh-init', async () => {
 const navLinks = [
   { label: 'Dashboard', icon: 'i-lucide-layout-dashboard', to: '/' },
   { label: 'Map', icon: 'i-lucide-map', to: '/map' },
+  { label: 'Messages', icon: 'i-lucide-message-square', to: '/messages' },
+  { label: 'Traceroutes', icon: 'i-lucide-waypoints', to: '/traceroutes' },
   { label: 'Packets', icon: 'i-lucide-radio-tower', to: '/packets' }
 ]
 </script>
@@ -19,13 +21,8 @@ const navLinks = [
           <MeshtasticLogo class="h-5 w-auto text-highlighted" />
           <span class="hidden sm:inline">myMeshtastic</span>
         </NuxtLink>
-        <UNavigationMenu :items="navLinks" class="flex-1" />
-        <UBadge
-          :color="connected ? 'success' : 'neutral'"
-          variant="subtle"
-          :icon="connected ? 'i-lucide-wifi' : 'i-lucide-wifi-off'"
-          :label="connected ? 'Live' : 'Offline'"
-        />
+        <UNavigationMenu :items="navLinks" class="min-w-0 flex-1" :ui="{ linkLabel: 'hidden lg:inline' }" />
+        <BrokerStatus />
         <UColorModeButton />
       </div>
     </header>

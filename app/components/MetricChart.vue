@@ -13,8 +13,8 @@ const props = defineProps<{ title: string, unit: string, series: ChartSeries[], 
 
 const colorMode = useColorMode()
 const THEME = {
-  light: { text: '#52514e', grid: '#e4e3df', series: ['#2a78d6', '#eb6834'] },
-  dark: { text: '#c3c2b7', grid: '#383835', series: ['#3987e5', '#d95926'] }
+  light: { text: '#52514e', grid: '#e4e3df', series: ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#4a3aa7', '#e34948'] },
+  dark: { text: '#c3c2b7', grid: '#383835', series: ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'] }
 }
 
 const hasData = computed(() => props.series.some(s => s.data.some(([, v]) => v != null)))

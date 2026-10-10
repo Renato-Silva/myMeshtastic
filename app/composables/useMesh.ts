@@ -3,6 +3,7 @@ export function useMesh() {
   const nodes = useState<MeshNode[]>('mesh-nodes', () => [])
   const packets = useState<MeshPacket[]>('mesh-packets', () => [])
   const links = useState<MeshLink[]>('mesh-links', () => [])
+  const status = useState<MeshStatus | null>('mesh-status', () => null)
   const connected = useState('mesh-connected', () => false)
 
   function upsertNode(node: MeshNode) {
@@ -17,7 +18,16 @@ export function useMesh() {
     else links.value[i] = link
   }
 
-  return { nodes, packets, links, connected, upsertNode, upsertLink }
+  return { nodes, packets, links, status, connected, upsertNode, upsertLink }
+}
+
+/** Live events that pages load themselves (messages, traceroutes) are re-dispatched here. */
+export const meshEvents = import.meta.client ? new EventTarget() : undefined
+
+export function useMeshEvent<T>(type: 'message' | 'traceroute', handler: (data: T) => void) {
+  const listener = (e: Event) => handler((e as CustomEvent<T>).detail)
+  onMounted(() => meshEvents?.addEventListener(type, listener))
+  onBeforeUnmount(() => meshEvents?.removeEventListener(type, listener))
 }
 
 /** A clock that ticks every 30s so "x min ago" labels stay fresh. */

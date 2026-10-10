@@ -45,6 +45,7 @@ export default defineNitroPlugin((nitroApp) => {
       await db.update(schema.nodes).set({ monitored: true })
     }
 
+    meshStatus.broker = config.mqttUrl
     client = mqtt.connect(config.mqttUrl, {
       username: config.mqttUsername || undefined,
       password: config.mqttPassword || undefined,
@@ -54,14 +55,22 @@ export default defineNitroPlugin((nitroApp) => {
       console.info(`[mqtt] connected to ${config.mqttUrl}, subscribing to ${config.mqttTopic}` +
         (allow.size ? ` (${allow.size} node${allow.size > 1 ? 's' : ''})` : ' (all nodes)'))
       client!.subscribe(config.mqttTopic)
+      meshStatus.mqttConnected = true
+      emitStatus()
+    })
+    client.on('close', () => {
+      if (!meshStatus.mqttConnected) return
+      meshStatus.mqttConnected = false
+      emitStatus()
     })
     client.on('error', err => console.error('[mqtt]', err.message))
 
     // One message at a time: dedup and relay resolution read what earlier messages wrote.
     let queue = Promise.resolve()
     client.on('message', (topic, payload) => {
-      // Only protobuf envelopes (".../2/e/..."); skip JSON, map reports and status topics.
-      if (!topic.includes('/e/')) return
+      meshStatus.lastMessageAt = new Date()
+      // Only protobuf envelopes (".../2/e/...") and map reports; skip JSON and status topics.
+      if (!topic.includes('/e/') && !topic.includes('/map/')) return
       queue = queue
         .then(() => ingest(payload, { keys, allow }))
         .catch(err => console.warn(`[mqtt] ${topic}: ${err.message}`))

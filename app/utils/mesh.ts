@@ -89,3 +89,8 @@ export const peerLabel = (p: LinkPeer) => p.shortName || p.id
 export function fmtKm(km: number) {
   return km < 1 ? `${Math.round(km * 1000)} m` : `${Number(km.toFixed(km < 10 ? 2 : 1))} km`
 }
+
+export const BROADCAST = 0xffffffff
+export const shortLabel = (n: NodeName | undefined, num?: number) =>
+  n?.shortName || n?.id || (num != null ? '!' + num.toString(16).padStart(8, '0') : '?')
+export const longLabel = (n: NodeName | undefined) => n?.longName || n?.id || '?'

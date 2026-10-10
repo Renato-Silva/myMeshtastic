@@ -22,3 +22,20 @@ export type MeshLink = Json<typeof s.links.$inferSelect> & {
   to: LinkPeer
   distanceKm: number | null
 }
+
+export interface NodeName {
+  id: string
+  shortName: string | null
+  longName: string | null
+}
+
+export type MeshMessage = Json<typeof s.messages.$inferSelect> & { fromName: NodeName, toName: NodeName | null }
+
+export type MeshTraceroute = Json<typeof s.traceroutes.$inferSelect> & { names: Record<number, NodeName> }
+
+export interface MeshStatus {
+  broker: string
+  mqttConnected: boolean
+  lastMessageAt: string | null
+  lastNodePacketAt: string | null
+}
