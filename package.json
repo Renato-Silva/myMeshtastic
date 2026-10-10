@@ -7,7 +7,11 @@
     "dev": "nuxt dev",
     "generate": "nuxt generate",
     "preview": "nuxt preview",
-    "postinstall": "nuxt prepare"
+    "postinstall": "nuxt prepare",
+    "start": "node .output/server/index.mjs",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "typecheck": "nuxt typecheck"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.16.0",
@@ -31,5 +35,8 @@
     "drizzle-kit": "^0.31.11",
     "typescript": "^5.9.3",
     "vue-tsc": "^3.3.12"
+  },
+  "engines": {
+    "node": ">=22.22.3"
   }
 }

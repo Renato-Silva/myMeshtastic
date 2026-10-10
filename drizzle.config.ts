@@ -1,5 +1,10 @@
 import { defineConfig } from 'drizzle-kit'
 
+// drizzle-kit doesn't read .env on its own (Forge links it into each release)
+try {
+  process.loadEnvFile()
+} catch {}
+
 export default defineConfig({
   dialect: 'mysql',
   schema: './server/database/schema.ts',
